@@ -1,0 +1,101 @@
+name: Check Active Networks for Missing RPC Endpoints
+# - will read all "active" networks from config/networks.json
+# - will check if for all these networks a RPC endpoint variable (e.g. ETH_NODE_URI_{NETWORK}) exists
+# - If an RPC is missing, please run in the main folder of the repo:
+#   bun add-network-rpc --network {networkName} --rpcUrl {rpcUrl} - this will add rpc with highest priority
+
+on:
+  push:
+  schedule:
+    # Run every day at midnight
+    - cron: '0 0 * * *'
+
+permissions:
+  contents: read # required to fetch repository contents
+  actions: read # required to access secrets via the GitHub Actions API
+
+jobs:
+  check-secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938 # v4.2.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: package.json
+
+      - name: Install dev dependencies
+        run: bun install
+
+      - name: Fetch RPC endpoints from MongoDB
+        run: |
+          # Run the fetch-rpcs.ts script to update .env with RPC endpoint variables
+          # This will fetch prioritized RPCs from MongoDB, or fall back to public RPCs from networks.json if MongoDB is unavailable
+          bun fetch-rpcs
+          # Only inject RPC endpoint variables into the GitHub Actions environment.
+          # Mask the URL (which may carry an API key) before forwarding so it is
+          # redacted from all subsequent log output for the rest of the run.
+          while IFS= read -r line || [[ -n "$line" ]]; do
+            if [[ "$line" =~ ^ETH_NODE_URI_ ]]; then
+              value="${line#*=}"
+              if [[ "$value" == \"*\" ]]; then value="${value:1:-1}"; fi
+              if [[ "$value" == \'*\' ]]; then value="${value:1:-1}"; fi
+              echo "::add-mask::$value"
+              echo "$line" >> "$GITHUB_ENV"
+            fi
+          done < ".env"
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+
+      - name: Read Networks Configuration
+        id: read-networks
+        run: |
+          # Extract active networks from networks.json and save to temp file
+          jq -r 'to_entries[] | select(.value.status == "active") | .key' config/networks.json > active_networks.txt
+          echo "Extracted active networks:"
+          cat active_networks.txt
+
+      - name: Check for Missing RPC Endpoints
+        id: check-secrets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GIT_ACTIONS_BOT_PAT_CLASSIC }}
+        run: |
+          MISSING_RPCS=""
+          # Helper function to get RPC env var name (matches logic in helperFunctions.sh)
+          getRPCEnvVarName() {
+            echo "ETH_NODE_URI_$(echo "$1" | tr '[:lower:]' '[:upper:]' | tr '-' '_')"
+          }
+
+          # Read networks from temp file
+          while read -r NETWORK; do
+            RPC_ENV_VAR=$(getRPCEnvVarName "$NETWORK")
+            echo "Checking for RPC: $RPC_ENV_VAR"
+            if [ -z "${!RPC_ENV_VAR}" ]; then
+              echo -e "\033[31mRPC for network $NETWORK ($RPC_ENV_VAR) is missing!\033[0m"
+              echo -e "Please run: bun add-network-rpc --network $NETWORK --rpcUrl {rpcUrl}"
+              MISSING_RPCS="$MISSING_RPCS\n$NETWORK"
+            else
+              echo -e "\033[32mRPC for network $NETWORK exists.\033[0m"
+            fi
+          done < active_networks.txt
+
+          if [ -n "$MISSING_RPCS" ]; then
+            echo -e "\033[31mMissing RPC endpoints found: $MISSING_RPCS\033[0m"
+            echo "MISSING_RPCS=$MISSING_RPCS" >> $GITHUB_ENV
+          else
+            echo -e "\033[32mFound an RPC endpoint for each active network. Check passed.\033[0m"
+          fi
+
+      - name: Send Reminder to Slack SC-general Channel
+        if: env.MISSING_RPCS != ''
+        uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_SC_GENERAL }}
+          webhook-type: incoming-webhook
+          payload: |
+            text: "Missing RPC endpoints for Network(s): ${{ env.MISSING_RPCS }}"

@@ -1,0 +1,58 @@
+{
+  "LinkToDeployedToAddresses": "https://docs-core.allbridge.io/product/how-does-allbridge-core-work/allbridge-core-contracts",
+  "IMPORTANT DEV NOTICE": "after adding a new mapping, run script/tasks/proposeAllBridgeChainIdMappings.ts to update chainId mappings on all other chains",
+  "Source for AllBridge chain IDs (allbridgeChainId per network): https://core.api.allbridgecoreapi.net/token-info": {},
+  "mappings": [
+    { "chainId": 1, "allBridgeChainId": 1 },
+    { "chainId": 56, "allBridgeChainId": 2 },
+    { "chainId": 1885080386571452, "allBridgeChainId": 3 },
+    { "chainId": 1151111081099710, "allBridgeChainId": 4 },
+    { "chainId": 137, "allBridgeChainId": 5 },
+    { "chainId": 42161, "allBridgeChainId": 6 },
+    { "chainId": 1201081091099710, "allBridgeChainId": 7 },
+    { "chainId": 43114, "allBridgeChainId": 8 },
+    { "chainId": 8453, "allBridgeChainId": 9 },
+    { "chainId": 10, "allBridgeChainId": 10 },
+    { "chainId": 42220, "allBridgeChainId": 11 },
+    { "chainId": 146, "allBridgeChainId": 12 },
+    { "chainId": 9270000000000000, "allBridgeChainId": 13 },
+    { "chainId": 130, "allBridgeChainId": 14 },
+    { "chainId": 59144, "allBridgeChainId": 17 }
+  ],
+  "mainnet": {
+    "allBridge": "0x609c690e8F7D68a59885c9132e812eEbDaAf0c9e"
+  },
+  "arbitrum": {
+    "allBridge": "0x9Ce3447B58D58e8602B7306316A5fF011B92d189"
+  },
+  "avalanche": {
+    "allBridge": "0x9068E1C28941D0A680197Cc03be8aFe27ccaeea9"
+  },
+  "base": {
+    "allBridge": "0x001E3f136c2f804854581Da55Ad7660a2b35DEf7"
+  },
+  "bsc": {
+    "allBridge": "0x3C4FA639c8D7E65c603145adaD8bD12F2358312f"
+  },
+  "celo": {
+    "allBridge": "0x80858f5F8EFD2Ab6485Aba1A0B9557ED46C6ba0e"
+  },
+  "linea": {
+    "allBridge": "0xf3Dd9d692A9b4Df331E3bb1C8f322BA0B299B907"
+  },
+  "optimism": {
+    "allBridge": "0x97E5BF5068eA6a9604Ee25851e6c9780Ff50d5ab"
+  },
+  "polygon": {
+    "allBridge": "0x7775d63836987f444E2F14AA0fA2602204D7D3E0"
+  },
+  "sonic": {
+    "allBridge": "0x801217549AB4b0860Bb506B1cbfF90f42819a116"
+  },
+  "unichain": {
+    "allBridge": "0x782e918ED2b3d161e90c5E154fed3E93D705C598"
+  },
+  "tron": {
+    "allBridge": "TAuErcuAtU6BPt6YwL51JZ4RpDCPQASCU2"
+  }
+}

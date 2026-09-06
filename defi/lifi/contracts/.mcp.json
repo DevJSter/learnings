@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "linear": {
+      "type": "http",
+      "url": "https://mcp.linear.app/mcp"
+    },
+    "notion": {
+      "type": "http",
+      "url": "https://mcp.notion.com/mcp"
+    },
+    "blockscout": {
+      "type": "http",
+      "url": "https://mcp.blockscout.com/mcp"
+    }
+  }
+}

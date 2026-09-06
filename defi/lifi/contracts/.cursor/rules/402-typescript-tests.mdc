@@ -1,0 +1,1 @@
+../../.agents/rules/402-typescript-tests.md

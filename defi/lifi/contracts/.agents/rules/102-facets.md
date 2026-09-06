@@ -1,0 +1,32 @@
+---
+name: Diamond facets
+description: Facet-only requirements and validations
+globs:
+  - 'src/Facets/**/*.sol'
+paths:
+  - 'src/Facets/**/*.sol'
+---
+
+## Facet Requirements ([CONV:FACET-REQS])
+
+- Location: `src/Facets/`; name contains `Facet`.
+- Required functions: `_startBridge` (internal), `swapAndStartBridgeTokensVia{FacetName}`, `startBridgeTokensVia{FacetName}`.
+- Facet-scoped selector naming ([CONV:FACET-SELECTORS]): every **external/public** function that is specific to one facet — admin setters, getters, initializers, config methods — must carry the facet/bridge identifier in its name (e.g. `setFraxChainIdToEid`, `getFraxChainIdToEid`, `initFrax`), never a generic name (`setChainIdToEid`, `getChainIdToEid`). Bare names collide by selector when two facets copy-paste the same config subsystem, and `UpdateScriptBase.buildDiamondCut` silently reassigns a colliding selector to the newly-cut facet **and removes every other selector of the previously-owning facet** — uninstalling a live bridge facet at deploy time with no error. The `startBridgeTokensVia{FacetName}` convention already enforces this for entrypoints; apply the same rule to *all* facet-specific functions. When adding a facet whose logic is derived from an existing one, diff its external selectors against the source facet and rename any that match.
+- Modifiers: `nonReentrant`, `refundExcessNative`, `validateBridgeData`, `doesNotContainSourceSwaps`/`doesContainSourceSwaps`, `doesNotContainDestinationCalls`/`doesContainDestinationCalls`.
+- Parameter handling:
+  - `receiverAddress` first in `{facetName}Data`, must match `bridgeData.receiver` (EVM).
+  - Validate `targetChainId` vs `bridgeData.destinationChain` (EVM↔EVM).
+- Opaque receiver / calldata-driven flows:
+  - If the facet consumes **opaque calldata** such that the final protocol receiver **cannot be reliably validated on-chain** against `bridgeData.receiver` (e.g., receiver encoded in dynamic destination calldata), you **must** add additional security that gates usage to trusted calldata sources.
+  - Preferred pattern: require a **backend EIP-712 signature** that commits to the relevant `BridgeData` fields and a hash of the opaque calldata, and verify it on-chain against an authorized signer.
+  - Document the changed trust assumptions prominently in the facet NatSpec and in `docs/` (integrators must understand that the receiver is not purely enforced on-chain for these flows).
+- Use LibAsset/LibSwap/LibAllowList + Validatable/SwapperV2; reserve native fees via `_depositAndSwap` variants when needed.
+- Positive slippage handling: When a bridge has a `minAmountOut` (or similar) parameter (e.g., `outputAmount` in AcrossV4), it must be updated in `swapAndStartBridgeTokensVia{FacetName}` to account for positive slippage from swaps. After `_depositAndSwap` updates `_bridgeData.minAmount`, adjust the bridge's minAmountOut parameter proportionally (accounting for decimal differences if applicable). See `AcrossFacetV4.sol` lines 137-147 for reference implementation.
+- Refund routing ([CONV:FACET-REFUNDS]): `msg.sender` may be a relayer or the Permit2Proxy, never assume it is the user. Value that belongs to the user — positive slippage refunds, `_depositAndSwap` leftovers AND excess native (`refundExcessNative(payable(data.refundRecipient))`) — must go to an explicit `refundRecipient` field in `{facetName}Data`, not to `msg.sender`. Zero-address-check `refundRecipient` on **every** entrypoint (revert `InvalidCallData`): without the check a zero recipient only reverts late inside `refundExcessNative`, and only when fee drift actually leaves an excess to refund — a data-dependent failure instead of a deterministic one. See `PaxosTransitFacet.sol` and `SupersetFacet.sol` (`refundAddress`).
+- Native fee guards: on the **swap** entrypoint, never require `nativeFee <= msg.value` (or otherwise tie the bridge's native fee to `msg.value`) — the fee may legitimately be funded by an ERC20→native pre-swap whose output the `_depositAndSwap` `nativeReserve` keeps in the diamond, so `msg.value` can be 0. On the **non-swap** entrypoint `msg.value` is the only native source, so `nativeFee <= msg.value` should be enforced there to prevent paying fees from stray diamond balance. See `PaxosTransitFacet.sol`.
+
+## Non-EVM Support
+
+- Use `bytes` for non-EVM receivers; must be non-zero.
+- For non-EVM flows, `bridgeData.receiver == NON_EVM_ADDRESS`.
+- For facets with `{facetName}Data.receiverAddress` field (e.g., `_glacisData.receiverAddress`), validate `{facetName}Data.receiverAddress != bytes32(0)` for non-EVM chains and revert with `InvalidNonEVMReceiver()` if zero.

@@ -1,0 +1,1 @@
+../../.agents/rules/002-architecture.md

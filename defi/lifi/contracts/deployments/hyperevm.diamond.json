@@ -1,0 +1,120 @@
+{
+  "LiFiDiamond": {
+    "Facets": {
+      "0x378202db86635B77115E48B425E9Ea654099Ec4A": {
+        "Name": "DiamondCutFacet",
+        "Version": "1.0.0"
+      },
+      "0x099ae5416af8a89E4A65EB91E365702CE942DD37": {
+        "Name": "DiamondLoupeFacet",
+        "Version": "1.0.0"
+      },
+      "0xD5616fc515c823BADb2AF6e36c522fe8C6AA6785": {
+        "Name": "OwnershipFacet",
+        "Version": "1.0.0"
+      },
+      "0x93EC187718fBc3768027E759583529f06076a35b": {
+        "Name": "WithdrawFacet",
+        "Version": "1.0.0"
+      },
+      "0xb672927122660a0B89faA3af30d13609174D9Df4": {
+        "Name": "PolymerCCTPFacet",
+        "Version": "3.1.0"
+      },
+      "0xbA1201E531C11DEfB602B35398e753f148A762f1": {
+        "Name": "AccessManagerFacet",
+        "Version": "1.0.0"
+      },
+      "0x0efE9fFF4A39e95aF5DeCe3d46F0DceDEE092778": {
+        "Name": "PeripheryRegistryFacet",
+        "Version": "1.0.0"
+      },
+      "0x2B47C16Cd8B53a4f502580A030de1E83dDCB677d": {
+        "Name": "SymbiosisFacet",
+        "Version": "2.0.0"
+      },
+      "0xa12D48dBf4248d702D5b41e271742914D7d8A321": {
+        "Name": "GenericSwapFacetV3",
+        "Version": "1.0.2"
+      },
+      "0xB2Cc198b18Eda93e4ac90F446EE499b7f4935F8a": {
+        "Name": "CalldataVerificationFacet",
+        "Version": "1.3.0"
+      },
+      "0x319573826D2787ebEb0196cd53Df44Dd971779d5": {
+        "Name": "EmergencyPauseFacet",
+        "Version": "1.0.1"
+      },
+      "0xeEBaF3A093FF4B8D7c8E22486562e8369c1ecBB7": {
+        "Name": "AcrossV4SwapFacet",
+        "Version": "1.0.0"
+      },
+      "0x710920F018630C2107C1d12047f8B66eaEd573a1": {
+        "Name": "EcoFacet",
+        "Version": "1.1.0"
+      },
+      "0xc5b0546842F572bC3328D38151b1EEeaE3428dAc": {
+        "Name": "LiFiIntentEscrowFacetV2",
+        "Version": "1.0.0"
+      },
+      "0x75325E9f1E8a6f26a590e2c2F4e5976a5e74F6Aa": {
+        "Name": "GasZipFacet",
+        "Version": "2.0.4"
+      },
+      "0x20A7ea2d139fCBCB01C021e58FEC16583137D9b5": {
+        "Name": "MayanFacet",
+        "Version": "2.0.0"
+      },
+      "0x8475a5f359bD33D33A6381b9381af5d86BC547A5": {
+        "Name": "RelayDepositoryFacet",
+        "Version": "1.0.0"
+      },
+      "0xE637Ed03Ec6856D5EeEAE26c494226EB38cBF5Db": {
+        "Name": "GlacisFacet",
+        "Version": "1.2.0"
+      },
+      "0x43DE35AdfB263d551c17c713674524CDd32aeE6b": {
+        "Name": "AcrossFacetV4",
+        "Version": "1.0.0"
+      },
+      "0xA4C11D296e04a52939a1bAff7E2fD70c95c048E9": {
+        "Name": "AcrossFacetPackedV4",
+        "Version": "1.0.0"
+      },
+      "0x34cf9a698734528A1c2f178744DEd7F15b5324D4": {
+        "Name": "WhitelistManagerFacet",
+        "Version": "1.0.0"
+      },
+      "0x6496DB316c9aB67C80baF5e2a592e8087d7C8023": {
+        "Name": "GardenFacet",
+        "Version": "1.0.0"
+      },
+      "0x4Bbe85750F2625F058285bf6ff857cd90746E1ac": {
+        "Name": "LayerSwapFacet",
+        "Version": "1.0.0"
+      },
+      "0x5b5b8a9A24a7FdCbd2a0C5f238fA21DBc30673d6": {
+        "Name": "FraxFacet",
+        "Version": "1.0.0"
+      }
+    },
+    "Periphery": {
+      "ERC20Proxy": "0x3E8EDF9CC2591a7dB1A36DBB73A10d8746368D61",
+      "Executor": "0x1F050386e23d81fC81C154a8F8616DEa3826b777",
+      "FeeCollector": "0x7CaC679Cc2dF9c602590eA4965091F54EC32F2Fc",
+      "FeeForwarder": "0xba072Bf218314E51d5c3d254800d799840ae6a25",
+      "GasZipPeriphery": "0x36dff5e623257bA84f8e221eDd4f9081dc183D4e",
+      "LiFiDEXAggregator": "0xb6abDE9E515780CcE12dD06b71C074d13dc68178",
+      "LidoWrapper": "",
+      "OutputValidator": "0x905F229f14Ec9e7Dd7428417CfBe7DBf1e1FD386",
+      "Patcher": "",
+      "Permit2Proxy": "0x3e851976DCA1bc02A2F35Ce926dCAFD1dEB3359b",
+      "ReceiverAcrossV3": "",
+      "ReceiverAcrossV4": "0xee2edD809EEddD4a944e6E4bb4A3AC0927CA02e1",
+      "ReceiverChainflip": "",
+      "ReceiverOIF": "0xa0A1b870EDD012FFc7D50eeCa4f65DAdBDc7D671",
+      "ReceiverStargateV2": "",
+      "TokenWrapper": "0xdD73C6B0387018314FFBd4CB0b9F382771BB541A"
+    }
+  }
+}

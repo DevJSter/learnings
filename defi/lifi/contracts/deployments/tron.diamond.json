@@ -1,0 +1,88 @@
+{
+  "LiFiDiamond": {
+    "Facets": {
+      "TNGUuj9GYbeUDn4GbTH2711kNyE4WcMbb4": {
+        "Name": "DiamondCutFacet",
+        "Version": "1.0.0"
+      },
+      "TSFek3JXzdwPHH6bs9TBF7wviJ71ZxRC5j": {
+        "Name": "DiamondLoupeFacet",
+        "Version": "1.0.0"
+      },
+      "TVofq5iFiwsDf4M3xcucpV7HCX5M6XpcHW": {
+        "Name": "OwnershipFacet",
+        "Version": "1.0.0"
+      },
+      "TY2VbJEwPPXWZ1qy4CsVchz1yipYNbgLkH": {
+        "Name": "WithdrawFacet",
+        "Version": "1.0.0"
+      },
+      "TLqbL8MKosbLxrJ9iTDTpZTzcXRWq8bFJ3": {
+        "Name": "AccessManagerFacet",
+        "Version": "1.0.0"
+      },
+      "TA9z2Lmg6g4tAwn31CK57ekjpmVXCr8kum": {
+        "Name": "PeripheryRegistryFacet",
+        "Version": "1.0.0"
+      },
+      "TZD2bfN2dKawq3TeJkbRopeTD4kAbXceWN": {
+        "Name": "GenericSwapFacetV3",
+        "Version": "2.0.0"
+      },
+      "TFJLkNo9rHYTkp6w5G5ETnTBzzybRTqwQf": {
+        "Name": "CalldataVerificationFacet",
+        "Version": "1.3.1"
+      },
+      "TNDAp17M3vKJ432TLPGGEokuhzf4GTQXR6": {
+        "Name": "EmergencyPauseFacet",
+        "Version": "1.0.1"
+      },
+      "TR15epdwXG9kBXtEBnF5bv6kSYRY5w6mXY": {
+        "Name": "AllBridgeFacet",
+        "Version": "2.2.0"
+      },
+      "TG6586TTEv664XWSD875tMk6yDuwedphpW": {
+        "Name": "EcoFacet",
+        "Version": "1.1.0"
+      },
+      "TViNVAJsVwfsL96yS8RqYMzg6uB9JmAYWn": {
+        "Name": "WhitelistManagerFacet",
+        "Version": "1.1.0"
+      },
+      "TQC7Upeh5DNcR2eZoYXpSok57FiJXCdNpp": {
+        "Name": "NEARIntentsFacet",
+        "Version": "1.0.0"
+      },
+      "TBFPs7mxPN3nCrnmbjrJh6BS48VpGbu6oQ": {
+        "Name": "LayerSwapFacet",
+        "Version": "1.0.0"
+      },
+      "TMY1N6rC61Fu1C8qvZEhwb3WLR7iY1ERuW": {
+        "Name": "SymbiosisFacet",
+        "Version": "2.0.0"
+      },
+      "TMck2qdZHmsdurz4uE4eNVBt14JHHLeoEB": {
+        "Name": "LiFiIntentEscrowFacetV2",
+        "Version": "1.0.0"
+      }
+    },
+    "Periphery": {
+      "ERC20Proxy": "TDCo8wrqwRVC7HaRAAsuCdbnS4AdAdtcn9",
+      "Executor": "TUJnqSDodwaDo2HFX2Ct2JsVEzWFpkAbht",
+      "FeeCollector": "TA7qd9KpEBH7qASAxxUpjWVfE3GiTwpd7q",
+      "FeeForwarder": "TNZ3fznhvEssLeovS9Uc7zCLgYjKdNjX9P",
+      "GasZipPeriphery": "",
+      "LiFiDEXAggregator": "",
+      "LidoWrapper": "",
+      "OutputValidator": "TGYGf6DrV2whLwqYXJp2H2gzJhSiqVrMbR",
+      "Patcher": "",
+      "Permit2Proxy": "",
+      "ReceiverAcrossV3": "",
+      "ReceiverAcrossV4": "",
+      "ReceiverChainflip": "",
+      "ReceiverOIF": "TSZnVJnhPCH8PECjEY4zNbv7kK1XiBUwwb",
+      "ReceiverStargateV2": "",
+      "TokenWrapper": "TBfUqkmaBBMFA87ZCCu9aibjo2EZLTSJv2"
+    }
+  }
+}

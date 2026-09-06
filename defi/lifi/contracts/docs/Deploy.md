@@ -1,0 +1,120 @@
+# Contract Deployment Checklist
+
+The following content will guide you through deploying and configuring all smart contracts to a new network (or to deploy a new staging environment).
+
+If you only want to deploy a new diamond contract and use existing deployed facets, please skip to [this section](#deploy-new)
+
+## Prerequisites
+
+1. Prepare your .env file to have the following values set:
+
+**ETH*NODE_URI*\<NETWORK\>**=<add your own RPC link here> (NETWORK being the network you deploy to e.g. MAINNET, POLYGON or BSC)
+(e.g. [https://1rpc.io/eth](https://1rpc.io/eth))
+
+**\<NETWORK\>\_ETHERSCAN_API_KEY**=<add your own Etherscan API key here>
+
+> > if you deploy to another network, make sure you have both variables set for that specific network. E.g.: **ETH_NODE_URI_GOERLI** and **GOERLI_ETHERSCAN_API_KEY** for deployments to Goerli etc.
+
+**PRODUCTION**=false (set to **true** if you want to deploy to production obviously, but confirm with @Edmund Zynda beforehand)
+
+2. Install required packages
+
+[https://github.com/foundry-rs/foundry](https://github.com/foundry-rs/foundry)
+
+[https://github.com/charmbracelet/gum](https://github.com/charmbracelet/gum)
+
+[https://github.com/stedolan/jq](https://github.com/stedolan/jq)
+
+3. Merge your branch with latest master to make sure you have all the latest addresses stored in your deployments folder
+
+4. Commit and push before deploying to production
+
+A production deploy is refused unless the working tree matches the commit it will be recorded at and that commit exists on an origin branch, because a deployment record only claims anything if someone can rebuild at its commit. Only build-affecting paths count - `src/`, `lib/`, `foundry.toml`, `remappings.txt` and `foundry.lock`; changes under `deployments/`, `broadcast/` and `script/` are ignored. Staging deploys warn instead of refusing. To see the verdict without deploying:
+
+```bash
+bunx tsx script/deploy/shared/assert-tree-recordable.ts
+```
+
+## Network Configuration
+
+1. **CREATE3Factory**
+
+   - Each network has its own CREATE3Factory deployment
+   - Factory addresses are stored in `networks.json`
+   - The factory is automatically deployed if not present on the target network
+
+2. **RPC Configuration**
+
+   - For LI.FI developers: RPC URLs are stored in MongoDB and automatically synced to `.env`
+   - For external developers: You must manually set RPC URLs in your `.env` file:
+
+     ```
+     ETH_NODE_URI_<NETWORKNAME>="<RPC_URL>"
+     ```
+
+     Example:
+
+     ```
+     ETH_NODE_URI_MAINNET="https://eth-mainnet.g.alchemy.com/v2/your-api-key"
+     ETH_NODE_URI_POLYGON="https://polygon-mainnet.g.alchemy.com/v2/your-api-key"
+     ```
+
+   - See `.env.example` for the required format
+   - Make sure to use reliable RPC providers for production deployments
+
+3. **Network Verification**
+   - Etherscan API keys are required for contract verification
+   - Keys are stored in `.env` file with the format `<NETWORK>_ETHERSCAN_API_KEY`
+   - Networks using EtherscanV2 API (like Ethereum mainnet and its L2s) share the same API key
+   - For networks that don't require an API KEY, use `NO_ETHERSCAN_API_KEY_REQUIRED` as the value to prevent Foundry errors
+
+Scripts:
+
+- /scripts/scriptMaster.sh (for deploying any of our contracts)
+  - execute with command `./scripts/scriptMaster.sh` in your console
+
+## <a name="deploy-new"></a>Deploy a new diamond and add already deployed facets
+
+(find detailed instructions for each step above)
+
+- [ ] Run this script `./scripts/scriptMaster.sh` and select `3) Deploy all contracts to one selected network (=new network)`
+- [ ] Choose a network
+- [ ] The script will:
+  1. Deploy CREATE3Factory if not present
+  2. Store the factory address in networks.json
+  3. Deploy the diamond contract
+  4. Add all required facets
+
+## <a name="deploying-contracts"></a>Deploying contracts
+
+- [ ] Run the script `./scripts/scriptMaster.sh` and select `1) Deploy one specific contract to one network`
+- [ ] Choose the network
+- [ ] Choose the contract you want to deploy and choose to add it to the diamond or not (choose not if you plan to upgrade using a SAFE)
+
+### Propose registration without redeploying
+
+When bytecode is already in `deployments/<network>.json` (deferred diamond cuts, or recreate after deleting a Safe proposal), use propose-only — no CREATE3:
+
+```bash
+./script/tasks/proposeContractToNetworks.sh MayanFacet mainnet arbitrum base --production
+./script/tasks/proposeContractToNetworks.sh MayanFacet --all-where-deployed --production
+```
+
+Outcomes per network: `OK` (new proposal), `SKIP` (already registered on the diamond, or identical pending proposal blocked by Mongo `intentHash`), `FAIL`. Diamond-called periphery also syncs the allowlist on OK networks. For the full signing/Slack lifecycle, use `/multisig-rollout --propose-only <Contract> …`.
+
+### Recomputing the calldata of a pending proposal
+
+To rebuild a proposal's `diamondCut` calldata from config on `main` and compare it byte-for-byte,
+see [DiamondCutRecomputation.md](./DiamondCutRecomputation.md).
+
+## <a name="upgrade-using-safe"></a>Upgrade using SAFE wallet
+
+- [ ] Make sure you have deployed a new diamond contract (see above)
+- [ ] Make sure the diamond contract is owned by the network's `LiFiTimelockController`, with the SAFE wallet as that timelock's proposer (on testnets the deployer owns the diamond directly)
+- [ ] Ensure that you have granted access to a secondary wallet to whitelist contracts and selectors
+- [ ] Run this script `./script/scriptMaster.sh`, select `1) Deploy one specific contract to one network`
+- [ ] Choose the network you want to run the upgrade on
+- [ ] Choose the facet you want to upgrade — the script deploys it and cuts it into the diamond in one run
+- [ ] When asked whether to add the contract to a diamond, select `yes - to LiFiDiamond` (or `yes - to LiFiDiamondImmutable`). A `no` answer deploys the facet only and performs no diamondCut
+- [ ] Wait for the script to finish. On production, non-testnet networks the diamondCut is proposed to the network's Safe (from `config/networks.json`) automatically, wrapped in a timelock `scheduleBatch`
+- [ ] Run `bun confirm-safe-tx` to review, sign and — once the threshold is met — execute the transaction. There is no Safe{Wallet} UI in this flow; proposals live in our own MongoDB store

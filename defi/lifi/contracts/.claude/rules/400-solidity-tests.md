@@ -1,0 +1,1 @@
+../../.agents/rules/400-solidity-tests.md

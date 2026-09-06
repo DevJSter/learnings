@@ -1,0 +1,1 @@
+../../.agents/rules/107-solidity-scripts.md

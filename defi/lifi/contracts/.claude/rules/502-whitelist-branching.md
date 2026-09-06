@@ -1,0 +1,1 @@
+../../.agents/rules/502-whitelist-branching.md

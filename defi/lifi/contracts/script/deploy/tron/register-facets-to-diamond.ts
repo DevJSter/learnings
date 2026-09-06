@@ -1,0 +1,650 @@
+#!/usr/bin/env bun
+
+import * as fs from 'fs'
+import * as path from 'path'
+
+import {
+  createTronWeb,
+  getCurrentPrices,
+  tryTronFacetLoupeAddressToBase58,
+  tronAddressToHex,
+  type TronTvmNetworkName,
+} from '@lifi/tron-devkit'
+import { defineCommand, runMain } from 'citty'
+import { consola } from 'consola'
+
+import { EnvironmentEnum, type SupportedChain } from '../../common/types'
+import { getPrivateKeyForEnvironment } from '../../demoScripts/utils/demoScriptHelpers'
+import { getEnvironment, updateDiamondJsonBatch } from '../../utils/utils'
+
+import { TRON_DIAMOND_FACET_GROUPS } from './constants.js'
+import {
+  estimateDiamondCutEnergy,
+  waitBetweenDeployments,
+} from './tronUtils.js'
+
+/**
+ * Extract function selectors from compiled artifact
+ * @param facetName The name of the facet
+ * @returns Array of function selectors with 0x prefix
+ */
+function getFacetSelectors(facetName: string): string[] {
+  try {
+    const artifactPath = path.join(
+      process.cwd(),
+      'out',
+      `${facetName}.sol`,
+      `${facetName}.json`
+    )
+
+    if (!fs.existsSync(artifactPath))
+      throw new Error(`Artifact not found: ${artifactPath}`)
+
+    const artifact = JSON.parse(fs.readFileSync(artifactPath, 'utf8'))
+    const methodIdentifiers = artifact.methodIdentifiers
+
+    if (!methodIdentifiers)
+      throw new Error(`No methodIdentifiers found in artifact for ${facetName}`)
+
+    // Convert to array of selectors with 0x prefix
+    const selectors = Object.values(methodIdentifiers).map(
+      (selector) => `0x${selector}`
+    )
+
+    consola.debug(`Extracted ${selectors.length} selectors for ${facetName}`)
+    return selectors as string[]
+  } catch (error) {
+    consola.error(`Failed to extract selectors for ${facetName}:`, error)
+    throw error
+  }
+}
+
+/**
+ * Get all facet selectors by extracting from artifacts
+ * Falls back to empty array if extraction fails for a specific facet
+ */
+function getAllFacetSelectors(): Record<string, string[]> {
+  const facets = [
+    'DiamondLoupeFacet',
+    'OwnershipFacet',
+    'WithdrawFacet',
+    'WhitelistManagerFacet',
+    'AccessManagerFacet',
+    'PeripheryRegistryFacet',
+    'GenericSwapFacetV3',
+    'CalldataVerificationFacet',
+    'EmergencyPauseFacet',
+  ]
+
+  const facetSelectors: Record<string, string[]> = {}
+
+  for (const facet of facets)
+    try {
+      facetSelectors[facet] = getFacetSelectors(facet)
+    } catch (error) {
+      consola.warn(`Could not extract selectors for ${facet}, skipping...`)
+      facetSelectors[facet] = []
+    }
+
+  return facetSelectors
+}
+
+/**
+ * Register facets to diamond in batch
+ */
+async function registerFacetsBatch(
+  tronWeb: any,
+  diamond: any,
+  diamondAddress: string,
+  facetNames: string[],
+  deployments: Record<string, string>,
+  fullHost: string,
+  dryRun = false,
+  network: SupportedChain = 'tron'
+): Promise<boolean> {
+  const facetCuts = []
+
+  // Get all facet selectors from artifacts
+  const FACET_SELECTORS = getAllFacetSelectors()
+
+  for (const facetName of facetNames) {
+    const facetAddress = deployments[facetName]
+    if (!facetAddress) {
+      consola.warn(` ${facetName} not found in deployments, skipping`)
+      continue
+    }
+
+    // Check if already registered by checking if any selectors are already registered
+    let isRegistered = false
+    try {
+      // Get currently registered facets
+      const facetsResponse = await diamond.facets().call()
+      const currentFacets = Array.isArray(facetsResponse[0])
+        ? facetsResponse[0]
+        : facetsResponse
+
+      // Check if this facet address is already registered
+      for (const facet of currentFacets) {
+        const registeredAddress = tryTronFacetLoupeAddressToBase58(
+          tronWeb,
+          facet[0]
+        )
+        if (registeredAddress === facetAddress) {
+          isRegistered = true
+          break
+        }
+      }
+    } catch (e) {
+      // If facets() fails, assume not registered
+    }
+
+    if (isRegistered) {
+      consola.info(` ${facetName} already registered: ${facetAddress}`)
+      continue
+    }
+
+    const facetAddressHex = tronAddressToHex(tronWeb, facetAddress)
+
+    // Push as array for TronWeb encoding
+    facetCuts.push([
+      facetAddressHex, // facetAddress
+      0, // action (Add)
+      FACET_SELECTORS[facetName], // functionSelectors
+    ])
+
+    consola.info(
+      ` Prepared ${facetName}: ${facetAddress} with ${
+        FACET_SELECTORS[facetName]?.length || 0
+      } selectors`
+    )
+  }
+
+  if (facetCuts.length === 0) {
+    consola.success('✨ All facets in this batch already registered!')
+    return true
+  }
+
+  // Estimate energy
+  consola.info(`⚡ Estimating energy for ${facetCuts.length} facets...`)
+  let estimatedEnergy: number
+  let estimatedCost: number
+
+  try {
+    estimatedEnergy = await estimateDiamondCutEnergy(
+      tronWeb,
+      diamondAddress,
+      facetCuts,
+      fullHost
+    )
+
+    // Get current energy price from the network
+    const { energyPrice } = await getCurrentPrices(tronWeb)
+    estimatedCost = estimatedEnergy * energyPrice
+    consola.info(` Estimated cost: ${estimatedCost.toFixed(4)} TRX`)
+  } catch (error: any) {
+    consola.error(
+      ' Energy estimation failed. Cannot proceed without estimation.'
+    )
+    consola.error('Error details:', error.message)
+    return false
+  }
+  if (dryRun) {
+    consola.info(' Dry run mode - not executing transaction')
+    // Format for display
+    const displayCuts = facetCuts.map((cut) => ({
+      facetAddress: cut[0],
+      action: cut[1],
+      functionSelectors: cut[2],
+    }))
+    consola.info('FacetCuts:', JSON.stringify(displayCuts, null, 2))
+    return true
+  }
+
+  // Check balance - need at least 5 TRX for safety
+  const balance = await tronWeb.trx.getBalance(tronWeb.defaultAddress.base58)
+  const balanceTRX = balance / 1000000
+  const requiredTRX = 5 // Based on actual usage, need at least 5 TRX
+
+  if (balanceTRX < requiredTRX)
+    throw new Error(
+      `Insufficient balance. Have: ${balanceTRX} TRX, Need: at least ${requiredTRX} TRX`
+    )
+  // Execute diamondCut
+  consola.info(` Executing diamondCut for ${facetCuts.length} facets...`)
+
+  try {
+    // First, let's verify the diamond has the diamondCut function
+    try {
+      const testResult =
+        await tronWeb.transactionBuilder.triggerConstantContract(
+          diamondAddress,
+          'facetAddress(bytes4)',
+          {},
+          [{ type: 'bytes4', value: '0x1f931c1c' }] // diamondCut selector
+        )
+
+      if (testResult.result?.result)
+        consola.info(' Diamond has diamondCut function registered')
+    } catch (e) {
+      consola.warn(' Could not verify diamondCut function')
+    }
+
+    // TronWeb contract calls - facetCuts is already formatted as arrays
+    // Use a higher fee limit - the actual transaction needs more energy than estimated
+    // Based on failed tx, it needs at least 3.41763 TRX worth of energy
+    // Setting to 5 TRX (5,000,000,000 SUN) to be safe
+    const feeLimitInSun = 5_000_000_000 // 5 TRX in SUN
+
+    consola.info(`💸 Using fee limit: ${feeLimitInSun / 1_000_000} TRX`)
+
+    const tx = await diamond
+      .diamondCut(facetCuts, '0x0000000000000000000000000000000000000000', '0x')
+      .send({
+        feeLimit: feeLimitInSun,
+        shouldPollResponse: true,
+      })
+
+    consola.success(` Transaction successful: ${tx}`)
+
+    // Update tron.diamond.json with successfully registered facets
+    if (!dryRun) {
+      // Verify which facets were actually registered by checking the diamond
+      const facetsResponse = await diamond.facets().call()
+      const registeredFacets = Array.isArray(facetsResponse[0])
+        ? facetsResponse[0]
+        : facetsResponse
+
+      const facetEntries = []
+      for (const facetName of facetNames) {
+        const facetAddress = deployments[facetName]
+        if (facetAddress && FACET_SELECTORS[facetName]) {
+          // Check if this facet is actually registered
+          let isRegistered = false
+          for (const facet of registeredFacets) {
+            const registeredAddress = tryTronFacetLoupeAddressToBase58(
+              tronWeb,
+              facet[0]
+            )
+            if (registeredAddress === facetAddress) {
+              isRegistered = true
+              break
+            }
+          }
+
+          if (isRegistered)
+            facetEntries.push({
+              address: facetAddress,
+              name: facetName,
+            })
+        }
+      }
+
+      if (facetEntries.length > 0)
+        await updateDiamondJsonBatch(facetEntries, network)
+    }
+
+    return true
+  } catch (error: any) {
+    consola.error(' diamondCut failed:', error.message || error)
+
+    // Log more details about the error
+    if (error.error) consola.error('Error details:', error.error)
+
+    if (error.output)
+      consola.error('Output:', JSON.stringify(error.output, null, 2))
+
+    if (error.transaction)
+      consola.error('Transaction:', JSON.stringify(error.transaction, null, 2))
+
+    // If it's a revert, try to decode the error
+    if (
+      error.error?.includes('REVERT') ||
+      error.output?.contractResult?.[0] === 'REVERT'
+    )
+      consola.error('Contract reverted')
+
+    return false
+  }
+}
+
+/**
+ * Main function to register facets to diamond
+ */
+async function registerFacetsToDiamond(
+  options: {
+    dryRun?: boolean
+    splitMode?: boolean
+  } = {}
+) {
+  try {
+    // Get environment and determine network
+    const environment = getEnvironment()
+    const networkName =
+      environment === EnvironmentEnum.production ? 'tron' : 'tronshasta'
+
+    // 1. Load deployment addresses from network-specific file
+    const fileSuffix =
+      environment === EnvironmentEnum.production ? '' : 'staging.'
+    const deploymentPath = path.join(
+      process.cwd(),
+      'deployments',
+      `${networkName}.${fileSuffix}json`
+    )
+
+    if (!fs.existsSync(deploymentPath))
+      throw new Error(
+        `deployments/${networkName}.${fileSuffix}json not found. Please deploy contracts first.`
+      )
+
+    const deployments = JSON.parse(fs.readFileSync(deploymentPath, 'utf8'))
+
+    // 2. Setup TronWeb
+    const privateKey = getPrivateKeyForEnvironment(environment)
+    const networkConfig = JSON.parse(
+      fs.readFileSync(
+        path.join(process.cwd(), 'config', 'networks.json'),
+        'utf8'
+      )
+    )
+    const fullHost =
+      networkConfig[networkName]?.rpcUrl || networkConfig[networkName]?.rpc
+
+    if (!fullHost) throw new Error('Tron RPC URL not found in networks.json')
+
+    const tronWeb = createTronWeb({
+      rpcUrl: fullHost,
+      networkKey: networkName as TronTvmNetworkName,
+      privateKey,
+    })
+
+    consola.info(` Connected to: ${fullHost}`)
+    consola.info(`👛 Deployer: ${tronWeb.defaultAddress.base58}`)
+
+    // 3. Get LiFiDiamond contract
+    const diamondAddress = deployments.LiFiDiamond
+    if (!diamondAddress) throw new Error('LiFiDiamond not found in deployments')
+
+    consola.info(`🔷 LiFiDiamond: ${diamondAddress}`)
+
+    // Load DiamondCutFacet ABI for the diamondCut function
+    const diamondCutABI = JSON.parse(
+      fs.readFileSync(
+        path.join(
+          process.cwd(),
+          'out',
+          'DiamondCutFacet.sol',
+          'DiamondCutFacet.json'
+        ),
+        'utf8'
+      )
+    ).abi
+
+    // Load DiamondLoupeFacet ABI for checking facets
+    const diamondLoupeABI = JSON.parse(
+      fs.readFileSync(
+        path.join(
+          process.cwd(),
+          'out',
+          'DiamondLoupeFacet.sol',
+          'DiamondLoupeFacet.json'
+        ),
+        'utf8'
+      )
+    ).abi
+
+    // Load OwnershipFacet ABI for owner function
+    const ownershipABI = JSON.parse(
+      fs.readFileSync(
+        path.join(
+          process.cwd(),
+          'out',
+          'OwnershipFacet.sol',
+          'OwnershipFacet.json'
+        ),
+        'utf8'
+      )
+    ).abi
+
+    // Combine ABIs for full diamond functionality
+    const combinedABI = [...diamondCutABI, ...diamondLoupeABI, ...ownershipABI]
+
+    // Get diamond contract instance with combined ABI
+    const diamond = tronWeb.contract(combinedABI, diamondAddress)
+
+    // 4. Check if DiamondLoupe already exists
+    let loupeExists = false
+    try {
+      // Try to call facets() - if it works, DiamondLoupe is registered
+      const facetsResponse = await diamond.facets().call()
+      const facets = Array.isArray(facetsResponse[0])
+        ? facetsResponse[0]
+        : facetsResponse
+      loupeExists = true
+      consola.success(
+        ` DiamondLoupe already registered, found ${facets.length} facets`
+      )
+
+      // List existing facets
+      for (const facet of facets) {
+        const facetHex = facet[0]
+        const selectors = facet[1]
+
+        const facetBase58 = tryTronFacetLoupeAddressToBase58(tronWeb, facetHex)
+
+        const facetName = Object.entries(deployments).find(
+          ([_, addr]) => addr === facetBase58
+        )?.[0]
+        if (facetName)
+          consola.info(
+            `  - ${facetName}: ${facetBase58} (${selectors.length} selectors)`
+          )
+      }
+    } catch (error) {
+      consola.info(' DiamondLoupe not registered yet')
+    }
+
+    // 5. Determine registration strategy
+    if (options.splitMode) {
+      // Register in groups
+      consola.info(' Using split registration mode...')
+
+      for (let i = 0; i < TRON_DIAMOND_FACET_GROUPS.length; i++) {
+        const group = TRON_DIAMOND_FACET_GROUPS[i]
+        if (!group) continue
+
+        // Skip DiamondLoupe group if already exists
+        if (i === 0 && loupeExists) {
+          consola.info(' Skipping DiamondLoupe group (already registered)')
+          continue
+        }
+
+        consola.info(
+          `\n Processing group ${i + 1}/${
+            TRON_DIAMOND_FACET_GROUPS.length
+          }: ${group.join(', ')}`
+        )
+
+        const success = await registerFacetsBatch(
+          tronWeb,
+          diamond,
+          diamondAddress,
+          group,
+          deployments,
+          fullHost,
+          options.dryRun,
+          networkName as SupportedChain
+        )
+
+        if (!success && !options.dryRun)
+          throw new Error(`Failed to register group: ${group.join(', ')}`)
+
+        // Small delay between groups
+        if (i < TRON_DIAMOND_FACET_GROUPS.length - 1 && !options.dryRun) {
+          consola.info(
+            ' Waiting 3 seconds before next group using TronGrid RPC...'
+          )
+          await waitBetweenDeployments(3, false, tronWeb, fullHost)
+        }
+      }
+    } else {
+      // Register all at once
+      consola.info(' Using batch registration mode...')
+
+      const allFacets = [
+        'DiamondLoupeFacet',
+        'OwnershipFacet',
+        'WithdrawFacet',
+        'WhitelistManagerFacet',
+        'AccessManagerFacet',
+        'PeripheryRegistryFacet',
+        'GenericSwapFacetV3',
+        'CalldataVerificationFacet',
+        'EmergencyPauseFacet',
+      ]
+
+      // Remove DiamondLoupe if already exists
+      const facetsToRegister = loupeExists
+        ? allFacets.filter((f) => f !== 'DiamondLoupeFacet')
+        : allFacets
+
+      const success = await registerFacetsBatch(
+        tronWeb,
+        diamond,
+        diamondAddress,
+        facetsToRegister,
+        deployments,
+        fullHost,
+        options.dryRun,
+        networkName as SupportedChain
+      )
+
+      if (!success && !options.dryRun) {
+        consola.warn(' Batch registration failed. Try using --split mode.')
+        throw new Error('Batch registration failed')
+      }
+    }
+
+    // 6. Final verification (if not dry run)
+    if (!options.dryRun) {
+      consola.info('\n Verifying final facet registration...')
+
+      try {
+        // Call facets() to get the full list with selectors
+        const facetsResponse = await diamond.facets().call()
+
+        // The response is nested - extract the actual facets array
+        const facets = Array.isArray(facetsResponse[0])
+          ? facetsResponse[0]
+          : facetsResponse
+
+        consola.success(` Total registered facets: ${facets.length}`)
+
+        // Map addresses to names and display
+        const facetList: string[] = []
+        for (const facet of facets) {
+          // Each facet is [address, selectors[]]
+          const facetHex = facet[0]
+          const selectors = facet[1]
+
+          const facetBase58 = tryTronFacetLoupeAddressToBase58(
+            tronWeb,
+            facetHex
+          )
+
+          const facetName = Object.entries(deployments).find(
+            ([_, addr]) => addr === facetBase58
+          )?.[0]
+
+          if (facetName) {
+            facetList.push(facetName)
+            consola.info(
+              `   ${facetName}: ${facetBase58} (${selectors.length} functions)`
+            )
+          } else consola.warn(`   Unknown facet: ${facetBase58}`)
+        }
+
+        // Check if all expected facets are registered
+        // Include DiamondCutFacet which is registered during diamond deployment
+        const facetsToCheck = getAllFacetSelectors()
+        const expectedFacets = [
+          'DiamondCutFacet',
+          ...Object.keys(facetsToCheck),
+        ]
+        const missingFacets = expectedFacets.filter(
+          (f) => !facetList.includes(f)
+        )
+
+        if (missingFacets.length > 0)
+          consola.warn(` Missing facets: ${missingFacets.join(', ')}`)
+        else consola.success('✨ All expected facets are registered!')
+
+        // Test a basic function call
+        consola.info('\n Testing basic function calls...')
+
+        try {
+          const owner = await diamond.owner().call()
+          consola.success(`   owner(): ${owner}`)
+        } catch (error) {
+          consola.warn(
+            '   Could not call owner() - OwnershipFacet might not be registered'
+          )
+        }
+      } catch (error: any) {
+        consola.error(' Verification failed:', error.message)
+      }
+    }
+  } catch (error: any) {
+    consola.error(' Registration failed:', error.message || error)
+    throw error
+  }
+}
+
+// CLI handling
+const main = defineCommand({
+  meta: {
+    name: 'register-facets-to-diamond',
+    description: 'Register facets to the Tron Diamond contract',
+  },
+  args: {
+    dryRun: {
+      type: 'boolean',
+      description: 'Run in dry-run mode without sending transactions',
+      default: false,
+    },
+    split: {
+      type: 'boolean',
+      description: 'Use split mode to register facets in groups',
+      default: false,
+    },
+  },
+  async run({ args }) {
+    const options = {
+      dryRun: args.dryRun,
+      splitMode: args.split,
+    }
+
+    if (args.dryRun)
+      consola.info(' Running in DRY RUN mode - no transactions will be sent')
+
+    if (args.split)
+      consola.info(' Using SPLIT mode - facets will be registered in groups')
+
+    consola.start('Starting facet registration...')
+
+    try {
+      await registerFacetsToDiamond(options)
+      consola.success('✨ Facet registration complete!')
+      process.exit(0)
+    } catch (error) {
+      consola.error(
+        ' Registration failed:',
+        error instanceof Error ? error.message : error
+      )
+      process.exit(1)
+    }
+  },
+})
+
+if (import.meta.main) runMain(main)
+
+export { registerFacetsToDiamond }

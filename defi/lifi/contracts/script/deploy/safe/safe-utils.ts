@@ -1,0 +1,3451 @@
+/**
+ * Safe Utilities
+ *
+ * This module provides utilities for interacting with Gnosis Safe contracts
+ * using Viem and TronWeb. It includes classes and functions for creating, signing, and
+ * executing transactions, as well as managing Safe configuration and MongoDB interactions.
+ */
+
+import * as fs from 'fs'
+import * as path from 'path'
+
+import {
+  TronWalletClient,
+  formatAddressForNetworkCliDisplay,
+  getTronNetworkKeyForChainId,
+  isTronTvmChainId,
+} from '@lifi/tron-devkit'
+import { consola } from 'consola'
+import { config } from 'dotenv'
+import {
+  MongoClient,
+  type Collection,
+  type InsertOneResult,
+  type ObjectId,
+} from 'mongodb'
+import {
+  createPublicClient,
+  createWalletClient,
+  encodeAbiParameters,
+  encodeFunctionData,
+  http,
+  keccak256,
+  parseAbi,
+  toFunctionSelector,
+  type Account,
+  type Address,
+  type Chain,
+  type Hex,
+  type PublicClient,
+  type WalletClient,
+} from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
+
+import data from '../../../config/networks.json'
+import type { IChainExecutionResult, IChainExecutor } from '../../common/types'
+import { normalizeAddressForNetwork } from '../../utils/normalizeAddressStringForViem'
+import { redactErrorReason } from '../../utils/redactUrls'
+import {
+  buildExplorerContractPageUrl,
+  getTransportConfigFromRpcUrl,
+  getViemChainForNetworkName,
+} from '../../utils/viemScriptHelpers'
+import {
+  captureGitProvenance,
+  PROVENANCE_UNKNOWN,
+  sanitizeProvenanceText,
+  type IGitProvenance,
+} from '../shared/git-provenance'
+
+import { SAFE_SINGLETON_ABI } from './config'
+import {
+  getDeployedFacetVersionFromLog,
+  getTargetStateFacetVersion,
+} from './facet-version-utils'
+import {
+  firstSupplied,
+  formatReasonWarning,
+  normalizeProposalReason,
+  resolveProposalIntent,
+} from './proposal-intent'
+import { buildReadOnlyClient } from './read-only-safe-client'
+import {
+  getLocalSelectorInfo,
+  resolveSelectorsViaFourByte,
+} from './selector-registry'
+import {
+  TIMELOCK_OPERATION_STATE_ABI,
+  TIMELOCK_ZERO_PREDECESSOR,
+  classifyTimelockOperation,
+  deriveTimelockSalt,
+  encodeTimelockScheduleBatch,
+} from './timelock-abi'
+
+config()
+
+const networks: Record<
+  string,
+  { safeAddress: string; status: string; chainId: number }
+> = data
+
+// Types for Safe transactions
+export enum OperationTypeEnum {
+  Call = 0,
+  DelegateCall = 1,
+}
+
+export enum PrivateKeyTypeEnum {
+  SAFE_SIGNER,
+  DEPLOYER,
+}
+
+export interface ISafeTransactionData {
+  to: Address
+  value: bigint
+  data: Hex
+  operation: OperationTypeEnum
+  nonce: bigint
+}
+
+export interface ISafeTransaction {
+  data: ISafeTransactionData
+  signatures: Map<string, ISafeSignature>
+}
+
+export interface ISafeSignature {
+  signer: Address
+  data: Hex
+}
+
+/**
+ * Lifecycle of a Safe tx row in MongoDB.
+ *
+ * - `pending`   : awaiting signatures or execution.
+ * - `submitted` : broadcast on-chain but no confirmed receipt yet. The Safe
+ *                 nonce may or may not have advanced; reconciliation resolves
+ *                 it to `executed`, `reverted`, or back to `pending` on the
+ *                 next run.
+ * - `executed`  : on-chain receipt confirmed success (Safe nonce consumed).
+ * - `reverted`  : on-chain receipt confirmed revert. The Safe nonce was NOT
+ *                 consumed — a top-level revert rolls back the `nonce++`, so
+ *                 the slot can be re-proposed; flagged for manual review.
+ */
+export type SafeTxStatus = 'pending' | 'submitted' | 'executed' | 'reverted'
+
+/**
+ * Link from a parked facet removal folded into a proposal back to the deprecation
+ * PR that parked it (deferred diamond-cleanup queue, DeferredDiamondCleanupQueue.md §6).
+ * An array so a primary proposal carrying several folded removals lists every origin PR.
+ */
+export interface IParkedTaskRef {
+  facet: string
+  prUrl: string
+}
+
+/**
+ * Who created a proposal, from what code, and why — captured from ambient git
+ * state when the proposal is stored, and shown to the signer at signing time so
+ * "what is this?" is answerable without asking around.
+ *
+ * This is self-reported context, not a security control: it makes honest
+ * mistakes (unpushed commit, dirty whitelist, no stated reason) visible and
+ * gives later checks something to verify against. It is not a defence against a
+ * proposer who is deliberately lying.
+ */
+export interface IProposalProvenance extends IGitProvenance {
+  /** One-line rationale, when the proposer supplied one. */
+  reason?: string
+  /**
+   * Canonical Linear issue URL. {@link storeTransactionInMongoDB} refuses to
+   * create a proposal without one, so it is optional on the type only because
+   * rows predating the requirement still exist.
+   */
+  ticketUrl?: string
+}
+
+/** Trailing options of {@link storeTransactionInMongoDB}. */
+export interface IProposalProvenanceOptions {
+  /**
+   * One-line rationale; falls back to the deploy chain's reason variable when
+   * unset.
+   */
+  reason?: string
+  /**
+   * Linear issue link or bare id; falls back to `SAFE_PROPOSAL_TICKET`. A
+   * proposal is not created without one.
+   */
+  ticket?: string
+  /**
+   * The already-validated URL. Set by {@link storeTransactionInMongoDB} after it
+   * resolves `ticket`; callers pass `ticket`, not this.
+   */
+  ticketUrl?: string
+  /**
+   * Test seam: use this block instead of probing git, so suites that exercise
+   * the storage funnel stay deterministic and spawn no subprocesses.
+   * Copied and sanitized before storage — never aliased, never stored raw.
+   * Production code never sets it.
+   */
+  override?: IProposalProvenance
+}
+
+export interface ISafeTxDocument {
+  safeAddress: string
+  network: string
+  chainId: number
+  safeTx: ISafeTransaction
+  safeTxHash: string
+  proposer: string
+  timestamp: Date
+  status: SafeTxStatus
+  executionHash?: string
+  submittedAt?: Date
+  intentHash?: string // Optional for backwards compatibility with existing documents
+  /**
+   * Origin-PR links for the parked facet removals folded into this proposal,
+   * surfaced to the signer at signing time. Optional and backward-compatible:
+   * only present on proposals the deferred-cleanup drain folded removals into.
+   */
+  parkedTaskRefs?: IParkedTaskRef[]
+  /**
+   * Provenance of this proposal. Optional: rows stored before capture existed
+   * have none, so every consumer must treat `undefined` as "legacy row" rather
+   * than as a clean, authorless proposal.
+   */
+  provenance?: IProposalProvenance
+}
+
+/** MongoDB row shape — includes the document `_id` returned by `find()`. */
+export interface ISafeTxMongoDocument extends ISafeTxDocument {
+  _id?: ObjectId
+}
+
+export interface IAugmentedSafeTxDocument extends ISafeTxMongoDocument {
+  safeTransaction: ISafeTransaction
+  hasSignedAlready: boolean
+  canExecute: boolean
+  threshold: number
+}
+
+/** Flat, display/JSON-friendly summary of a Safe proposal document. */
+export interface IProposalSummary {
+  network: string
+  chainId: number
+  safeAddress: string
+  nonce: number
+  to: string
+  selector: string
+  status: string
+  signatureCount: number
+  signers: string[]
+  proposer: string
+  safeTxHash: string
+  timestamp: string
+  executionHash?: string
+  /** Origin-PR links for parked facet removals folded into this proposal (§6). */
+  parkedTaskRefs?: IParkedTaskRef[]
+}
+
+/**
+ * Retries a function multiple times if it fails
+ * @param func - The async function to retry
+ * @param retries - Number of retries remaining
+ * @returns The result of the function
+ */
+export const retry = async <T>(
+  func: () => Promise<T>,
+  retries = 3
+): Promise<T> => {
+  try {
+    const result = await func()
+    return result
+  } catch (e) {
+    console.error('Error details:', {
+      error: e,
+      remainingRetries: retries - 1,
+    })
+    if (retries > 0) return retry(func, retries - 1)
+
+    throw e
+  }
+}
+
+/**
+ * Safe client for scripts: viem for EVM JSON-RPC (reads, signing, non-Tron execution)
+ * plus optional {@link TronWalletClient} for Tron TVM broadcast (`wallet/triggersmartcontract`).
+ * The same private key backs both paths when initialized from `privateKey`.
+ */
+
+/** How a Safe transaction is presented to the signing device. */
+export type SafeSigningMode = 'hash' | 'eip712'
+
+/**
+ * Which signing mode to use.
+ *
+ * Hash signing is the default: the device shows the one `safeTxHash` a signer
+ * compares against the out-of-band message, rather than a typed-data payload
+ * that hardware wallets render inconsistently and reject outright when it grows
+ * large.
+ *
+ * @param env - Environment to read, normally `process.env`.
+ * @returns The mode. `ENABLE_SAFE_TX_HASH_SIGNING` is deliberately not read, so
+ * that a stale `=false` cannot opt an operator back into typed data.
+ */
+export function resolveSafeSigningMode(
+  env: Record<string, string | undefined>
+): SafeSigningMode {
+  return env['ENABLE_SAFE_EIP712_SIGNING'] === 'true' ? 'eip712' : 'hash'
+}
+
+/** Which on-device verification aid to show the signer. */
+export type SignerVerificationDisplay = 'filmstrip' | 'hash-compare' | 'none'
+
+/**
+ * Chooses the verification aid for a pending transaction.
+ *
+ * The signer must be pointed at a screen the device actually renders, so this
+ * follows the signing mode rather than the shape of the transaction. Typed data
+ * with no calldata has no screens to reproduce, and naming the single hash
+ * screen there would describe a mode the device is not in.
+ *
+ * Signing does not branch on the network — `signTransaction` dispatches on the
+ * mode alone — so a Tron signer compares the same hash on the same device. Only
+ * the Flex typed-data filmstrip is EVM-specific.
+ *
+ * @param mode - The resolved signing mode.
+ * @param isTron - Whether the network is Tron, where the Flex flow does not apply.
+ * @param callData - The Safe transaction's calldata, if any.
+ * @returns The aid to display.
+ */
+export function resolveSignerVerificationDisplay(
+  mode: SafeSigningMode,
+  isTron: boolean,
+  callData: string | undefined
+): SignerVerificationDisplay {
+  if (mode === 'hash') return 'hash-compare'
+  if (isTron) return 'none'
+  return callData && callData !== '0x' ? 'filmstrip' : 'none'
+}
+
+/** `v` values a wallet may return, and what each means before framing. */
+const RECOVERY_IDS = new Map([
+  [0, 27],
+  [1, 28],
+  [27, 27],
+  [28, 28],
+])
+
+/**
+ * Marks a signature as `eth_sign` for a Safe.
+ *
+ * `checkNSignatures` treats `v > 30` as eth_sign and recovers over the EIP-191
+ * digest with `v - 4`, so 27 and 28 become 31 and 32.
+ *
+ * @param signature - A 65-byte signature as returned by the wallet.
+ * @returns The same r and s with the marked `v`.
+ * @throws When the signature is not 65 hex-encoded bytes, or carries a `v` that
+ * is not a recovery id. `v` must be normalised rather than incremented: Safe
+ * reads a `v` below 27 as a contract signature or an approved hash, so a wallet
+ * answering `v=0` would otherwise be marked as `v=4`, and an already-marked
+ * signature would be marked a second time.
+ */
+export function toSafeEthSignSignature(signature: Hex): Hex {
+  if (!/^0x[0-9a-fA-F]{130}$/.test(signature))
+    throw new Error(
+      signature.length === 132
+        ? `Expected a 65-byte signature as 0x + 130 hex characters, got 132 characters that are not all hex: ${signature}`
+        : `Expected a 65-byte signature as 0x + 130 hex characters, got ${signature.length} characters`
+    )
+
+  const recoveryId = RECOVERY_IDS.get(parseInt(signature.slice(130, 132), 16))
+  if (recoveryId === undefined)
+    throw new Error(
+      `Signature carries v=0x${signature.slice(
+        130,
+        132
+      )}, which is not a recovery id. Safe reads v below 27 as a contract signature or an approved hash, and v above 30 as already marked for eth_sign.`
+    )
+
+  return `${signature.slice(0, 130)}${(recoveryId + 4).toString(16)}` as Hex
+}
+export class SafeClient {
+  /**
+   * Public client for read operations
+   * @private
+   */
+  private publicClient: PublicClient
+
+  /**
+   * Wallet client for write operations and signing
+   * @private
+   */
+  private walletClient: WalletClient
+
+  /**
+   * Address of the Safe contract
+   * @private
+   */
+  private safeAddress: Address
+
+  /**
+   * Address of the account used for signing
+   * @public
+   */
+  public account: Account
+
+  /**
+   * Chain-specific executor selected during client initialization.
+   */
+  private chainExecutor?: IChainExecutor
+
+  /**
+   * Chain id resolved from config at init time. Lets the signing path build
+   * the EIP-712 domain without an RPC round trip.
+   */
+  private knownChainId?: number
+
+  public constructor(
+    publicClient: PublicClient,
+    walletClient: WalletClient,
+    safeAddress: Address,
+    account: Account,
+    chainExecutor?: IChainExecutor,
+    knownChainId?: number
+  ) {
+    this.publicClient = publicClient
+    this.walletClient = walletClient
+    this.safeAddress = safeAddress
+    this.account = account
+    this.chainExecutor = chainExecutor
+    this.knownChainId = knownChainId
+  }
+
+  /**
+   * Creates the chain-specific Safe executor for the connected network.
+   * @param publicClient - Public client used to detect the current chain
+   * @param walletClient - Wallet client used for EVM execution
+   * @param account - Account used for signing and broadcasting
+   * @param tronWalletClient - Optional Tron signer required for TVM execution
+   * @param networkName - Network name used to construct explorer URLs in results
+   * @param configChainId - Chain id resolved from config; used as the source
+   * of truth for executor selection and verified against the live RPC
+   * @returns Executor implementation matching the connected chain
+   * @throws Error if a Tron executor is required but no Tron signer is available
+   */
+  private static async createChainExecutor(
+    publicClient: PublicClient,
+    walletClient: WalletClient,
+    account: Account,
+    tronWalletClient?: TronWalletClient,
+    networkName?: string,
+    configChainId?: number
+  ): Promise<IChainExecutor | undefined> {
+    const chainId = configChainId ?? (await publicClient.getChainId())
+
+    // When the chain id came from config, a single global --rpc-url override
+    // (or a wrong RPC env var) can still point this network at another chain's
+    // endpoint. That is never survivable: a Safe tx hash read from the wrong
+    // chain's Safe (deterministic deployments share addresses) would be signed
+    // for the wrong domain, so a proven mismatch aborts instead of warning.
+    // An unreachable RPC stays non-fatal — reads fail loudly later anyway.
+    if (configChainId !== undefined) {
+      let liveChainId: number | undefined
+      try {
+        liveChainId = await publicClient.getChainId()
+      } catch {
+        consola.warn(
+          `[${networkName}] Could not verify the RPC's chain id against config — proceeding unverified`
+        )
+      }
+      if (liveChainId !== undefined && liveChainId !== configChainId)
+        throw new Error(
+          `[${networkName}] RPC reports chain id ${liveChainId} but config expects ${configChainId} — check the --rpc-url override / RPC env var`
+        )
+    }
+
+    if (isTronTvmChainId(chainId)) {
+      // No tronWalletClient means Ledger/signing-only mode — defer executor creation to execution time.
+      if (!tronWalletClient) return undefined
+
+      const networkKey = getTronNetworkKeyForChainId(chainId)
+      if (!networkKey)
+        throw new Error(
+          `Tron chain ID ${chainId} is not mapped to tron/tronshasta`
+        )
+
+      const { TronChainExecutor } = await import('./executors/tron-executor')
+      return new TronChainExecutor(tronWalletClient, networkKey)
+    }
+
+    const { EvmChainExecutor } = await import('./executors/evm-executor')
+    return new EvmChainExecutor(
+      walletClient,
+      publicClient,
+      account,
+      networkName
+    )
+  }
+
+  public static async init(options: {
+    provider: string | Chain
+    privateKey?: string
+    safeAddress: Address
+    useLedger?: boolean
+    ledgerOptions?: {
+      derivationPath?: string
+      ledgerLive?: boolean
+      accountIndex?: number
+    }
+    account?: Account
+    networkName?: string
+  }): Promise<SafeClient> {
+    const {
+      privateKey,
+      safeAddress,
+      provider,
+      useLedger,
+      ledgerOptions,
+      account: preCreatedAccount,
+      networkName,
+    } = options
+
+    // Create provider with Viem
+    let publicClient: PublicClient
+    let chain: Chain | undefined = undefined
+
+    if (typeof provider === 'string') {
+      const { url, fetchOptions, retryCount, retryDelay } =
+        getTransportConfigFromRpcUrl(provider)
+      publicClient = createPublicClient({
+        transport: http(url, {
+          ...(fetchOptions ? { fetchOptions } : {}),
+          ...(retryCount !== undefined ? { retryCount } : {}),
+          ...(retryDelay !== undefined ? { retryDelay } : {}),
+        }),
+      })
+    } else {
+      chain = provider
+      publicClient = createPublicClient({
+        chain: chain,
+        transport: http(),
+      })
+    }
+
+    // Get account - either use pre-created, from private key, or create new Ledger connection
+    let account
+    let tronWalletClient: TronWalletClient | undefined
+    if (preCreatedAccount) {
+      account = preCreatedAccount
+    } else if (useLedger) {
+      // Dynamically import the Ledger module to avoid dependency issues
+      const { getLedgerAccount } = await import('./ledger')
+      const ledgerResult = await getLedgerAccount(ledgerOptions)
+      account = ledgerResult.account
+    } else if (privateKey) {
+      const pkForViem = (
+        privateKey.startsWith('0x') ? privateKey : `0x${privateKey}`
+      ) as Hex
+      account = privateKeyToAccount(pkForViem)
+      tronWalletClient = new TronWalletClient(privateKey)
+    } else
+      throw new Error(
+        'Either privateKey, useLedger, or account must be provided'
+      )
+
+    // Create wallet client with the account and chain
+    const walletTransport =
+      typeof provider === 'string'
+        ? (() => {
+            const { url, fetchOptions, retryCount, retryDelay } =
+              getTransportConfigFromRpcUrl(provider)
+            return http(url, {
+              ...(fetchOptions ? { fetchOptions } : {}),
+              ...(retryCount !== undefined ? { retryCount } : {}),
+              ...(retryDelay !== undefined ? { retryDelay } : {}),
+            })
+          })()
+        : http()
+    const walletClient = createWalletClient({
+      account,
+      chain,
+      transport: walletTransport,
+    })
+
+    // Read the chain id straight from networks.json — unlike
+    // getViemChainForNetworkName this needs no RPC env var, so the optimization
+    // (and the mismatch check above it) survives an explicit provider URL. An
+    // unknown network yields undefined and falls back to the live RPC lookup.
+    let configChainId: number | undefined = chain?.id
+    if (configChainId === undefined && networkName)
+      configChainId = networks[networkName.toLowerCase()]?.chainId
+
+    const chainExecutor = await SafeClient.createChainExecutor(
+      publicClient,
+      walletClient,
+      account,
+      tronWalletClient,
+      networkName,
+      configChainId
+    )
+
+    return new SafeClient(
+      publicClient,
+      walletClient,
+      safeAddress,
+      account,
+      chainExecutor,
+      configChainId
+    )
+  }
+
+  // Get Safe address
+  public getAddress(): Address {
+    return this.safeAddress
+  }
+
+  // Used by reconciliation to issue read-only RPC calls (getTransactionReceipt,
+  // getLogs, getBlockNumber) without re-creating a client.
+  public getPublicClient(): PublicClient {
+    return this.publicClient
+  }
+
+  public async getChainId(): Promise<number> {
+    return this.publicClient.getChainId()
+  }
+
+  // Get nonce from Safe contract (replaces getNonce from Safe SDK)
+  public async getNonce(): Promise<bigint> {
+    try {
+      return await this.publicClient.readContract({
+        address: this.safeAddress,
+        abi: SAFE_SINGLETON_ABI,
+        functionName: 'nonce',
+      })
+    } catch (error) {
+      console.error('Error getting nonce:', error)
+      throw error
+    }
+  }
+
+  // Get owners from Safe contract (replaces getOwners from Safe SDK)
+  public async getOwners(): Promise<Address[]> {
+    try {
+      const owners = [
+        ...(await this.publicClient.readContract({
+          address: this.safeAddress,
+          abi: SAFE_SINGLETON_ABI,
+          functionName: 'getOwners',
+        })),
+      ]
+      return owners
+    } catch (error) {
+      console.error('Error getting owners:', error)
+      throw error
+    }
+  }
+
+  // Get threshold from Safe contract (replaces getThreshold from Safe SDK)
+  public async getThreshold(): Promise<bigint> {
+    try {
+      return await this.publicClient.readContract({
+        address: this.safeAddress,
+        abi: SAFE_SINGLETON_ABI,
+        functionName: 'getThreshold',
+      })
+    } catch (error) {
+      console.error('Error getting threshold:', error)
+      throw error
+    }
+  }
+
+  // Create a Safe transaction (replaces createTransaction from Safe SDK)
+  public async createTransaction(options: {
+    transactions: {
+      to: Address
+      value: string | bigint
+      data: Hex
+      operation?: OperationTypeEnum
+      nonce?: bigint
+    }[]
+  }): Promise<ISafeTransaction> {
+    const tx = options.transactions[0]
+    if (!tx) throw new Error('No transaction provided')
+
+    const nonce = tx.nonce !== undefined ? tx.nonce : await this.getNonce()
+
+    const safeTx: ISafeTransaction = {
+      data: {
+        to: tx.to,
+        value: typeof tx.value === 'string' ? BigInt(tx.value) : tx.value,
+        data: tx.data,
+        operation: tx.operation || OperationTypeEnum.Call,
+        nonce: nonce,
+      },
+      signatures: new Map(),
+    }
+
+    return safeTx
+  }
+
+  // Create a Safe transaction for adding an owner (replaces createAddOwnerTx from Safe SDK)
+  public async createAddOwnerTx(
+    options: { ownerAddress: Address; threshold: bigint },
+    txOptions?: { nonce?: bigint }
+  ): Promise<ISafeTransaction> {
+    try {
+      const data = encodeFunctionData({
+        abi: SAFE_SINGLETON_ABI,
+        functionName: 'addOwnerWithThreshold',
+        args: [options.ownerAddress, options.threshold],
+      })
+
+      return await this.createTransaction({
+        transactions: [
+          {
+            to: this.safeAddress,
+            value: 0n,
+            data,
+            nonce: txOptions?.nonce,
+          },
+        ],
+      })
+    } catch (error) {
+      console.error('Error creating add owner transaction:', error)
+      throw error
+    }
+  }
+
+  // Create a Safe transaction for changing the threshold (replaces createChangeThresholdTx from Safe SDK)
+  public async createChangeThresholdTx(
+    threshold: number,
+    txOptions?: { nonce?: bigint }
+  ): Promise<ISafeTransaction> {
+    try {
+      const data = encodeFunctionData({
+        abi: SAFE_SINGLETON_ABI,
+        functionName: 'changeThreshold',
+        args: [BigInt(threshold)],
+      })
+
+      return await this.createTransaction({
+        transactions: [
+          {
+            to: this.safeAddress,
+            value: 0n,
+            data,
+            nonce: txOptions?.nonce,
+          },
+        ],
+      })
+    } catch (error) {
+      console.error('Error creating change threshold transaction:', error)
+      throw error
+    }
+  }
+
+  // Generate transaction hash (replaces getTransactionHash from Safe SDK)
+  public async getTransactionHash(safeTx: ISafeTransaction): Promise<Hex> {
+    try {
+      // The Safe contract's getTransactionHash matches this implementation
+      // GS026 error indicates invalid signature which would happen if we're not using
+      // the correct hash that the Safe contract expects
+      const hash = await this.publicClient.readContract({
+        address: this.safeAddress,
+        abi: SAFE_SINGLETON_ABI,
+        functionName: 'getTransactionHash',
+        args: [
+          safeTx.data.to,
+          safeTx.data.value,
+          safeTx.data.data,
+          safeTx.data.operation,
+          0n, // safeTxGas
+          0n, // baseGas
+          0n, // gasPrice
+          '0x0000000000000000000000000000000000000000' as Address, // gasToken
+          '0x0000000000000000000000000000000000000000' as Address, // refundReceiver
+          safeTx.data.nonce,
+        ],
+      })
+
+      console.log('Generated transaction hash:', hash)
+      return hash
+    } catch (error) {
+      console.error('Error generating transaction hash:', error)
+      throw error
+    }
+  }
+
+  // Sign a transaction hash using eth_sign (most compatible with all Safe versions)
+  // Error GS026 indicates an invalid signature issue
+  public async signHash(hash: Hex): Promise<ISafeSignature> {
+    try {
+      console.log('Signing hash:', hash)
+
+      // Use eth_sign (via personal_sign) which adds the Ethereum message prefix
+      // This is the most compatible method with all Safe contract versions
+      const ethSignSignature = await this.walletClient.signMessage({
+        account: this.account,
+        message: { raw: hash },
+      })
+
+      console.log('Raw signature:', ethSignSignature)
+
+      if (!ethSignSignature.startsWith('0x') || ethSignSignature.length !== 132)
+        throw new Error(
+          `Invalid signature format from wallet. Expected 0x + 130 hex chars but got: ${ethSignSignature}`
+        )
+
+      const safeSignature = toSafeEthSignSignature(ethSignSignature)
+
+      console.log('Safe signature:', safeSignature)
+
+      return {
+        signer: this.account.address,
+        data: safeSignature,
+      }
+    } catch (error: unknown) {
+      const errorMsg = error instanceof Error ? error.message : String(error)
+      console.error('Error signing hash with eth_sign:', error)
+      throw new Error(`Failed to sign hash: ${errorMsg}`)
+    }
+  }
+
+  /**
+   * Signs the Safe transaction hash via eth_sign. This is the default path;
+   * EIP-712 typed data is the opt-in.
+   *
+   * Hardware wallets (e.g. Ledger) reject very large EIP-712 payloads (status
+   * 0x6a80). The Safe contracts fully support eth_sign signatures over the Safe
+   * transaction hash.
+   */
+  public async signTransactionWithHash(
+    safeTx: ISafeTransaction
+  ): Promise<ISafeTransaction> {
+    try {
+      // 1) Compute the Safe transaction hash on-chain (via viem client)
+      const hash = await this.getTransactionHash(safeTx)
+      consola.info(`[safe-utils] Signing Safe tx hash via eth_sign: ${hash}`)
+
+      // 2) Sign the hash using eth_sign-compatible flow
+      const sig = await this.signHash(hash)
+
+      // 3) Attach signature to the Safe transaction
+      safeTx.signatures.set(sig.signer.toLowerCase(), sig)
+
+      return safeTx
+    } catch (error: unknown) {
+      const errorMsg = error instanceof Error ? error.message : String(error)
+      console.error('Error signing transaction hash:', error)
+      throw new Error(`Failed to sign transaction hash: ${errorMsg}`)
+    }
+  }
+
+  // Sign a Safe transaction (replaces signTransaction from Safe SDK)
+  public async signTransaction(
+    safeTx: ISafeTransaction
+  ): Promise<ISafeTransaction> {
+    if (resolveSafeSigningMode(process.env) === 'hash')
+      return this.signTransactionWithHash(safeTx)
+
+    {
+      // Prefer the config-resolved id so this path makes no RPC call between
+      // the operator's "Sign" selection and the Ledger prompt (a cold
+      // connection here delays the device display)
+      const chainId =
+        this.knownChainId ?? (await this.publicClient.getChainId())
+
+      // Define EIP-712 domain and types
+      const domain = {
+        chainId,
+        verifyingContract: this.safeAddress,
+      }
+
+      const types = {
+        SafeTx: [
+          { name: 'to', type: 'address' },
+          { name: 'value', type: 'uint256' },
+          { name: 'data', type: 'bytes' },
+          { name: 'operation', type: 'uint8' },
+          { name: 'safeTxGas', type: 'uint256' },
+          { name: 'baseGas', type: 'uint256' },
+          { name: 'gasPrice', type: 'uint256' },
+          { name: 'gasToken', type: 'address' },
+          { name: 'refundReceiver', type: 'address' },
+          { name: 'nonce', type: 'uint256' },
+        ],
+      }
+
+      // Message to sign following EIP-712 structure
+      const message = {
+        to: safeTx.data.to,
+        value: safeTx.data.value,
+        data: safeTx.data.data,
+        operation: safeTx.data.operation,
+        safeTxGas: 0n,
+        baseGas: 0n,
+        gasPrice: 0n,
+        gasToken: '0x0000000000000000000000000000000000000000' as Address,
+        refundReceiver: '0x0000000000000000000000000000000000000000' as Address,
+        nonce: safeTx.data.nonce,
+      }
+
+      // Sign typed data using walletClient
+      const typedDataSignature = await this.walletClient.signTypedData({
+        account: this.account,
+        domain,
+        types,
+        primaryType: 'SafeTx',
+        message,
+      })
+
+      // Format the signature for Safe contract
+      const signature = {
+        signer: this.account.address,
+        data: typedDataSignature,
+      }
+
+      // Add signature to transaction
+      safeTx.signatures.set(signature.signer.toLowerCase(), signature)
+
+      return safeTx
+    }
+  }
+
+  // Validate a signature to ensure it's in the correct format for Safe contracts
+  private validateSignature(signature: Hex): boolean {
+    if (!signature.startsWith('0x')) return false
+
+    // Remove 0x prefix for length check
+    const sigWithoutPrefix = signature.slice(2)
+
+    // For Safe signatures in format r+s+v, signature should be 130 chars (65 bytes)
+    // r = 32 bytes (64 chars), s = 32 bytes (64 chars), v = 1 byte (2 chars)
+    if (sigWithoutPrefix.length !== 130) return false
+
+    // For eth_sign signatures (type 1), v values should be 31 or 32
+    // (normal v value of 27/28 + 4 = 31/32)
+    const vValue = parseInt(sigWithoutPrefix.slice(128, 130), 16)
+
+    // Check for eth_sign signatures or standard EIP-712 signatures
+    // EIP-712 signatures typically have v values of 27 or 28
+    // eth_sign signatures have v values of 31 or 32
+    return vValue === 27 || vValue === 28 || vValue === 31 || vValue === 32
+  }
+
+  /**
+   * Format signatures as bytes for contract submission (sorted by signer address).
+   */
+  public formatSignatures(signatures: Map<string, ISafeSignature>): Hex {
+    if (!signatures.size) return '0x' as Hex
+
+    try {
+      // Convert Map to array and sort by signer address
+      // Safe contract requires signatures to be sorted by signer address
+      const sortedSigs = Array.from(signatures.values()).sort((a, b) => {
+        const addressA = a.signer.toLowerCase()
+        const addressB = b.signer.toLowerCase()
+        return addressA < addressB ? -1 : addressA > addressB ? 1 : 0
+      })
+
+      // Concatenate all signatures as bytes
+      // Each signature is 65 bytes: r (32) + s (32) + v (1)
+      let signatureBytes = '0x' as Hex
+      for (const sig of sortedSigs) {
+        // Ensure signature data is in correct format
+        if (!sig.data.startsWith('0x'))
+          throw new Error(
+            `Invalid signature format. Expected 0x prefix but got: ${sig.data}`
+          )
+
+        // Validate signature format
+        if (!this.validateSignature(sig.data))
+          throw new Error(
+            `Invalid signature length. Safe signatures must be 65 bytes (130 hex chars excluding 0x prefix). Got: ${
+              sig.data.slice(2).length
+            } chars`
+          )
+
+        // Remove 0x prefix before concatenating
+        signatureBytes = (signatureBytes + sig.data.slice(2)) as Hex
+      }
+
+      return signatureBytes
+    } catch (error: unknown) {
+      const errorMsg = error instanceof Error ? error.message : String(error)
+      console.error('Error formatting signatures:', error)
+      throw new Error(`Failed to format signatures: ${errorMsg}`)
+    }
+  }
+
+  /**
+   * Executes a Safe transaction via the chain-specific executor.
+   * @param safeTx - The transaction to execute
+   * @returns Object containing the transaction hash, optional receipt, and display metadata
+   * @throws Error if execution fails
+   */
+  public async executeTransaction(
+    safeTx: ISafeTransaction
+  ): Promise<IChainExecutionResult> {
+    try {
+      const signatures = this.formatSignatures(safeTx.signatures)
+      if (!this.chainExecutor)
+        throw new Error(
+          'Safe client is missing a chain executor. Initialize the client via SafeClient.init().'
+        )
+
+      const executionResult = await this.chainExecutor.executeTransaction({
+        safeAddress: this.safeAddress,
+        to: safeTx.data.to,
+        value: safeTx.data.value,
+        data: safeTx.data.data,
+        operation: safeTx.data.operation,
+        signatures,
+      })
+      return executionResult
+    } catch (error: unknown) {
+      const errorMsg = error instanceof Error ? error.message : String(error)
+      // Matched before the revert case: a pre-broadcast refusal quotes the
+      // underlying estimation error, which itself contains "execution reverted".
+      // Relabelling it would tell the operator a nonce was consumed when nothing
+      // was ever sent.
+      if (errorMsg.includes('refusing to broadcast')) throw error
+
+      // Redacted: viem embeds the endpoint, credentials and all, in error.message,
+      // and SlackNotifier publishes it outside the workflow log's masking.
+      const safeMsg = redactErrorReason(errorMsg)
+      if (errorMsg.includes('execution reverted'))
+        throw new Error(`Safe execution reverted: ${safeMsg}`)
+
+      throw new Error(`Error executing transaction: ${safeMsg}`)
+    }
+  }
+
+  /**
+   * Cleanup method to close transport connections and prevent hanging processes
+   */
+  public async cleanup(): Promise<void> {
+    try {
+      // Close public client transport if it has a close method
+      if (
+        this.publicClient?.transport &&
+        'close' in this.publicClient.transport
+      )
+        await (
+          this.publicClient.transport as { close?: () => Promise<void> }
+        ).close?.()
+
+      // Close wallet client transport if it has a close method
+      if (
+        this.walletClient?.transport &&
+        'close' in this.walletClient.transport
+      )
+        await (
+          this.walletClient.transport as { close?: () => Promise<void> }
+        ).close?.()
+    } catch (error: unknown) {
+      // Don't throw on cleanup errors, just log them
+      const errorMsg = error instanceof Error ? error.message : String(error)
+      consola.warn(`Warning during SafeClient cleanup: ${errorMsg}`)
+    }
+  }
+}
+
+/** @deprecated Use {@link SafeClient}. */
+export type ViemSafe = SafeClient
+
+/**
+ * Statuses that consumed the Safe nonce on-chain. The single source of truth
+ * shared by every consumed-nonce decision: the runtime predicate
+ * {@link safeTxStatusConsumedNonce} (used by `confirm-safe-tx.ts`) and the
+ * MongoDB highest-consumed-nonce query in `reconcile.ts`. A MongoDB filter
+ * can't call the predicate, so both reference this constant instead.
+ *
+ * Only a fully successful `execTransaction` advances the Safe nonce. A
+ * top-level revert always rolls back the `nonce++`, so `reverted` never
+ * consumes the nonce — this holds unconditionally, regardless of the
+ * executor's gas params. (In this repo `safeTxGas=0` is also why an inner-call
+ * failure surfaces as a top-level revert (GS013) rather than an
+ * `ExecutionFailure` with a consumed nonce.)
+ */
+export const NONCE_CONSUMING_STATUSES: readonly SafeTxStatus[] = ['executed']
+
+/**
+ * Whether a resolved Safe-tx execution status consumed the Safe nonce on-chain.
+ *
+ * A `submitted` row is an unknown outcome (no receipt yet) and must not be
+ * treated as consuming the nonce until reconciliation resolves it. Callers gate
+ * `expectedNonce++` on this — returning true for `reverted` would desync the
+ * expected nonce and make the next-nonce proposal revert with GS026. See
+ * {@link NONCE_CONSUMING_STATUSES} for the rationale.
+ *
+ * @param status - Resolved Safe-tx status after an execution attempt.
+ * @returns true only for `executed`; false for `reverted`, `submitted`, and `pending`.
+ */
+export function safeTxStatusConsumedNonce(status: SafeTxStatus): boolean {
+  return NONCE_CONSUMING_STATUSES.includes(status)
+}
+
+/**
+ * Where a pending proposal's nonce sits relative to the Safe's next expected
+ * nonce: `stale` was already consumed on-chain, `future` is only reachable once
+ * a lower-nonce proposal has executed, `current` is executable now.
+ */
+export type SafeNonceStatus = 'current' | 'stale' | 'future'
+
+/** Options for {@link canExecuteWithNonceStatus}. */
+export interface INonceExecutionOptions {
+  /** Result of {@link isFutureNonceExecutionAllowed} (the operator escape hatch). */
+  allowFutureNonce: boolean
+}
+
+/**
+ * Result of {@link canExecuteWithNonceStatus}, discriminated on `canExecute`.
+ * `reason` identifies the case so the caller can render the matching message
+ * without re-deriving the decision.
+ */
+export type NonceExecutionDecision =
+  | { canExecute: true; reason: 'nonce-current' | 'future-nonce-override' }
+  | { canExecute: false; reason: 'stale-nonce' | 'future-nonce' }
+
+/**
+ * Whether the operator escape hatch for broadcasting a future-nonce proposal is
+ * enabled. Default OFF — it exists only for the case where the configured RPC
+ * reports an out-of-date on-chain nonce, which makes an executable proposal look
+ * like a future one.
+ *
+ * @returns true only when the escape-hatch env flag is set to the string `true`.
+ */
+export function isFutureNonceExecutionAllowed(): boolean {
+  return process.env.ALLOW_FUTURE_NONCE_EXECUTION === 'true'
+}
+
+/**
+ * Whether a proposal may be broadcast given where its nonce sits relative to the
+ * Safe's expected nonce.
+ *
+ * Both mismatch cases are guaranteed on-chain reverts, so both are refused by
+ * default: a stale nonce fails the Safe's nonce check outright, and a future
+ * nonce fails with GS026. Only the future case has a legitimate false-positive
+ * (a lagging RPC under-reporting the on-chain nonce), so only that one can be
+ * overridden — see {@link isFutureNonceExecutionAllowed}. A stale reading would
+ * require an RPC reporting a nonce ahead of consensus, which cannot happen, so
+ * no override is offered there.
+ *
+ * Signing is out of scope: this gates broadcasting only, and callers must keep
+ * sign-only actions available for future-nonce proposals so signatures can be
+ * collected while the blocking proposal is still pending.
+ *
+ * @param status - Nonce position of the proposal relative to the Safe.
+ * @param options - Whether the future-nonce escape hatch is enabled.
+ * @returns A discriminated decision carrying the reason for the outcome.
+ */
+export function canExecuteWithNonceStatus(
+  status: SafeNonceStatus,
+  options: INonceExecutionOptions
+): NonceExecutionDecision {
+  if (status === 'stale') return { canExecute: false, reason: 'stale-nonce' }
+
+  if (status === 'future')
+    return options.allowFutureNonce
+      ? { canExecute: true, reason: 'future-nonce-override' }
+      : { canExecute: false, reason: 'future-nonce' }
+
+  return { canExecute: true, reason: 'nonce-current' }
+}
+
+/**
+ * Converts an in-memory Safe tx (Map signatures, bigint fields) into the plain
+ * object shape MongoDB stores. Mirrors propose-to-safe-tron.ts.
+ */
+export function serializeSafeTxForMongo(safeTx: ISafeTransaction): {
+  data: ISafeTransactionData
+  signatures: Record<string, ISafeSignature>
+} {
+  return {
+    data: safeTx.data,
+    signatures: Object.fromEntries(safeTx.signatures),
+  }
+}
+
+/**
+ * Builds a filter that targets exactly one pendingTransactions row.
+ * Prefer `_id` from the fetched document; fall back to pending + identity
+ * fields when `_id` is absent (unit-test fakes).
+ */
+export function mongoSafeTxRowFilter(
+  doc: ISafeTxMongoDocument,
+  networkKey?: string,
+  chainId?: number
+): Record<string, unknown> {
+  if (doc._id) return { _id: { $eq: doc._id } }
+
+  if (networkKey !== undefined && chainId !== undefined)
+    return {
+      status: { $eq: 'pending' },
+      safeTxHash: { $eq: doc.safeTxHash },
+      network: { $eq: networkKey },
+      chainId: { $eq: chainId },
+    }
+
+  throw new Error(
+    'Cannot target a unique pendingTransactions row without _id or (network, chainId)'
+  )
+}
+
+/**
+ * Initializes a SafeTransaction from MongoDB document data
+ * @param txFromMongo - Transaction document from MongoDB
+ * @param safe - SafeClient instance
+ * @returns Initialized SafeTransaction with signatures
+ */
+export const initializeSafeTransaction = async (
+  txFromMongo: ISafeTxDocument,
+  safe: SafeClient
+): Promise<ISafeTransaction> => {
+  // Create a new transaction using our viem-based Safe implementation
+  const safeTransaction = await safe.createTransaction({
+    transactions: [
+      {
+        to: normalizeAddressForNetwork(
+          txFromMongo.network,
+          String(txFromMongo.safeTx.data.to)
+        ),
+        value: BigInt(txFromMongo.safeTx.data.value),
+        data: txFromMongo.safeTx.data.data as Hex,
+        operation: txFromMongo.safeTx.data.operation as OperationTypeEnum,
+        nonce: BigInt(txFromMongo.safeTx.data.nonce),
+      },
+    ],
+  })
+
+  // Add existing signatures (MongoDB stores a plain object; Map if in-memory)
+  if (txFromMongo.safeTx.signatures) {
+    const signatures = new Map<string, { signer: Address; data: Hex }>()
+    const raw = txFromMongo.safeTx.signatures
+    const entries =
+      raw instanceof Map
+        ? Array.from(raw.entries())
+        : Object.entries(raw as Record<string, unknown>)
+    entries.forEach(([key, value]: [string, unknown]) => {
+      if (
+        typeof value === 'object' &&
+        value !== null &&
+        'signer' in value &&
+        'data' in value
+      ) {
+        signatures.set(key, {
+          signer: (value as { signer: Address }).signer,
+          data: (value as { data: Hex }).data,
+        })
+      }
+    })
+    safeTransaction.signatures = signatures
+  }
+
+  return safeTransaction
+}
+
+/**
+ * Checks if a SafeTransaction has enough signatures to execute
+ * @param safeTx - The transaction to check
+ * @param threshold - Number of signatures required
+ * @returns True if the transaction has enough signatures
+ */
+export const hasEnoughSignatures = (
+  safeTx: ISafeTransaction,
+  threshold: number
+): boolean => {
+  const sigCount = safeTx?.signatures?.size || 0
+  return sigCount >= threshold
+}
+
+/**
+ * Checks if the current signer has already signed the transaction
+ * @param safeTx - The transaction to check
+ * @param signerAddress - Address of the current signer
+ * @returns True if the signer has already signed
+ */
+export const isSignedByCurrentSigner = (
+  safeTx: ISafeTransaction,
+  signerAddress: Address
+): boolean => {
+  if (!safeTx?.signatures) return false
+  const signers = Array.from(safeTx.signatures.values()).map((sig) =>
+    sig.signer.toLowerCase()
+  )
+  return signers.includes(signerAddress.toLowerCase())
+}
+
+/**
+ * Lists the signer addresses on a raw MongoDB Safe tx document. Unlike
+ * `isSignedByCurrentSigner`, this reads the persisted `safeTx.signatures`,
+ * which is a plain object keyed by lowercased signer address (the in-memory
+ * Map is serialized on insert); a Map is also tolerated for safety.
+ * @param doc - Safe tx document from MongoDB
+ * @returns Lowercased signer addresses found on the document
+ */
+export function getSigners(doc: ISafeTxDocument): string[] {
+  const signatures = doc.safeTx?.signatures
+  if (!signatures) return []
+  const entries =
+    signatures instanceof Map
+      ? Array.from(signatures.values())
+      : Object.values(signatures)
+  const signers: string[] = []
+  for (const entry of entries)
+    if (
+      typeof entry === 'object' &&
+      entry !== null &&
+      'signer' in entry &&
+      typeof (entry as { signer: unknown }).signer === 'string'
+    )
+      signers.push((entry as { signer: string }).signer.toLowerCase())
+
+  return signers
+}
+
+/** Returns the number of signatures stored on a MongoDB Safe tx document. */
+export function getSignatureCountFromDoc(doc: ISafeTxDocument): number {
+  return getSigners(doc).length
+}
+
+/** Whether `signerAddress` appears in a MongoDB Safe tx document's signatures. */
+export function isDocSignedBySigner(
+  doc: ISafeTxDocument,
+  signerAddress: Address
+): boolean {
+  return getSigners(doc).includes(signerAddress.toLowerCase())
+}
+
+/** Whether a MongoDB Safe tx document has enough signatures to execute. */
+export function hasEnoughSignaturesInDoc(
+  doc: ISafeTxDocument,
+  threshold: number
+): boolean {
+  return getSignatureCountFromDoc(doc) >= threshold
+}
+
+/**
+ * Extracts the 4-byte function selector from Safe tx calldata.
+ * @param data - Calldata hex string from the Safe tx document
+ * @returns `0x`-prefixed selector, or `0x` when no calldata is present
+ */
+export function getSelector(data: unknown): string {
+  if (
+    typeof data !== 'string' ||
+    !/^0x[0-9a-fA-F]{8}(?:[0-9a-fA-F]{2})*$/.test(data)
+  )
+    return '0x'
+  return data.substring(0, 10)
+}
+
+/**
+ * Converts a MongoDB Safe tx document into a flat summary row for display or
+ * JSON output (see list-pending-proposals.ts).
+ * @param doc - Safe tx document from MongoDB
+ * @returns Summary with signature count, selector, and normalized fields
+ */
+export function summarizeProposalDoc(doc: ISafeTxDocument): IProposalSummary {
+  const signers = getSigners(doc)
+  // Real documents always carry a Date; pass through a raw string as-is and
+  // use '' as the missing-sentinel rather than stringifying unexpected types
+  // into a misleading value.
+  const timestamp =
+    doc.timestamp instanceof Date
+      ? doc.timestamp.toISOString()
+      : typeof doc.timestamp === 'string'
+      ? doc.timestamp
+      : ''
+
+  const summary: IProposalSummary = {
+    network: doc.network,
+    chainId: doc.chainId,
+    safeAddress: doc.safeAddress,
+    nonce: Number(doc.safeTx?.data?.nonce ?? 0),
+    to: String(doc.safeTx?.data?.to ?? ''),
+    selector: getSelector(doc.safeTx?.data?.data),
+    status: doc.status,
+    signatureCount: signers.length,
+    signers,
+    proposer: doc.proposer,
+    safeTxHash: doc.safeTxHash,
+    timestamp,
+  }
+  if (doc.executionHash) summary.executionHash = doc.executionHash
+  if (doc.parkedTaskRefs) summary.parkedTaskRefs = doc.parkedTaskRefs
+  return summary
+}
+
+/**
+ * Checks if an address is an owner of a Safe
+ * @param existingOwners - Array of existing Safe owner addresses
+ * @param addressToCheck - Address to check for ownership
+ * @returns True if the address is an owner, false otherwise
+ */
+export function isAddressASafeOwner(
+  existingOwners: Address[],
+  addressToCheck: Address
+): boolean {
+  const existingOwnersLowercase = existingOwners.map((o) => o.toLowerCase())
+  return existingOwnersLowercase.includes(addressToCheck.toLowerCase())
+}
+
+/**
+ * Checks if adding current signer's signature would meet the threshold
+ * @param safeTx - The transaction to check
+ * @param threshold - Number of signatures required
+ * @returns True if adding a signature would meet the threshold
+ */
+export const wouldMeetThreshold = (
+  safeTx: ISafeTransaction,
+  threshold: number
+): boolean => {
+  const currentSignatures = safeTx?.signatures?.size || 0
+  const afterSigning = currentSignatures + 1
+  return afterSigning >= threshold
+}
+
+/**
+ * Checks if the PRIVATE_KEY_PRODUCTION wallet has already signed the transaction
+ * @param safeTx - The transaction to check
+ * @returns True if the PRIVATE_KEY_PRODUCTION wallet has already signed
+ */
+export const isSignedByProductionWallet = (
+  safeTx: ISafeTransaction
+): boolean => {
+  if (!safeTx?.signatures) return false
+
+  try {
+    const productionPrivateKey = getPrivateKey('PRIVATE_KEY_PRODUCTION')
+    const productionAccount = privateKeyToAccount(
+      `0x${productionPrivateKey}` as Hex
+    )
+    const productionAddress = productionAccount.address
+
+    const signers = Array.from(safeTx.signatures.values()).map((sig) =>
+      sig.signer.toLowerCase()
+    )
+    return signers.includes(productionAddress.toLowerCase())
+  } catch (error) {
+    // If we can't get the production key, assume it hasn't signed
+    return false
+  }
+}
+
+/**
+ * Determines if the "Sign and Execute With Deployer" option should be shown
+ * @param safeTx - The Safe transaction
+ * @param threshold - The signature threshold required
+ * @param currentSignerAddress - Address of the current signer
+ * @returns True if the option should be shown
+ */
+export const shouldShowSignAndExecuteWithDeployer = (
+  safeTx: ISafeTransaction,
+  threshold: number,
+  currentSignerAddress: Address
+): boolean => {
+  const currentSignatures = safeTx?.signatures?.size || 0
+  const isCurrentSignerAlreadySigned = isSignedByCurrentSigner(
+    safeTx,
+    currentSignerAddress
+  )
+  const isDeployerAlreadySigned = isSignedByProductionWallet(safeTx)
+
+  // Don't show if current signer has already signed
+  if (isCurrentSignerAlreadySigned) return false
+
+  // Calculate signatures after current signer signs
+  const signaturesAfterCurrentSigner = currentSignatures + 1
+
+  // Two scenarios:
+  // 1. If deployer already signed: check if current user's signature would meet threshold
+  // 2. If deployer hasn't signed: check if current user + deployer would meet threshold
+  if (isDeployerAlreadySigned)
+    // Deployer already signed, just need current user to potentially meet threshold
+    return signaturesAfterCurrentSigner >= threshold
+  else {
+    // Deployer hasn't signed, need both current user + deployer to meet threshold
+    const signaturesAfterBoth = signaturesAfterCurrentSigner + 1
+    return signaturesAfterBoth >= threshold
+  }
+}
+
+/**
+ * Gets Safe information directly from the contract
+ * @param publicClient - Viem public client
+ * @param safeAddress - Address of the Safe
+ * @returns Safe information including owners and threshold
+ */
+export async function getSafeInfoFromContract(
+  publicClient: PublicClient,
+  safeAddress: Address
+): Promise<{
+  owners: Address[]
+  threshold: bigint
+  nonce: bigint
+}> {
+  const [owners, threshold, nonce] = await Promise.all([
+    publicClient.readContract({
+      address: safeAddress,
+      abi: SAFE_SINGLETON_ABI,
+      functionName: 'getOwners',
+    }),
+    publicClient.readContract({
+      address: safeAddress,
+      abi: SAFE_SINGLETON_ABI,
+      functionName: 'getThreshold',
+    }),
+    publicClient.readContract({
+      address: safeAddress,
+      abi: SAFE_SINGLETON_ABI,
+      functionName: 'nonce',
+    }),
+  ])
+
+  return {
+    owners: owners as Address[],
+    threshold,
+    nonce,
+  }
+}
+
+/**
+ * Computes a unique hash representing the intent of a proposal
+ * Used for duplicate detection - excludes nonce so same action = same hash
+ * @param network - Network name
+ * @param chainId - Chain ID
+ * @param safeAddress - Safe contract address
+ * @param to - Target contract address
+ * @param value - ETH value
+ * @param data - Calldata
+ * @param operation - Call or DelegateCall
+ * @returns Keccak256 hash of the encoded parameters
+ */
+export function computeProposalIntentHash(
+  network: string,
+  chainId: number,
+  safeAddress: Address,
+  to: Address,
+  value: bigint,
+  data: Hex,
+  operation: OperationTypeEnum
+): Hex {
+  const encoded = encodeAbiParameters(
+    [
+      { name: 'network', type: 'string' },
+      { name: 'chainId', type: 'uint256' },
+      { name: 'safeAddress', type: 'address' },
+      { name: 'to', type: 'address' },
+      { name: 'value', type: 'uint256' },
+      { name: 'data', type: 'bytes' },
+      { name: 'operation', type: 'uint8' },
+    ],
+    [
+      network.toLowerCase(),
+      BigInt(chainId),
+      safeAddress,
+      to,
+      value,
+      data,
+      operation,
+    ]
+  )
+
+  return keccak256(encoded)
+}
+
+function sanitizeOverride(
+  override: IProposalProvenance,
+  fallbackReason: string | undefined
+): IProposalProvenance {
+  const actorRaw = sanitizeProvenanceText(override.actor)
+  const actor: IProposalProvenance['actor'] =
+    actorRaw === 'human' || actorRaw === 'bot' || actorRaw === 'ci'
+      ? actorRaw
+      : PROVENANCE_UNKNOWN
+
+  const overrideReason = normalizeProposalReason(override.reason)
+
+  return {
+    capturedAt:
+      sanitizeProvenanceText(override.capturedAt) || new Date().toISOString(),
+    actor,
+    proposerHandle:
+      sanitizeProvenanceText(override.proposerHandle) || PROVENANCE_UNKNOWN,
+    gitCommit: sanitizeProvenanceText(override.gitCommit) || PROVENANCE_UNKNOWN,
+    gitBranch: sanitizeProvenanceText(override.gitBranch) || PROVENANCE_UNKNOWN,
+    dirtyTreeScoped: Array.isArray(override.dirtyTreeScoped)
+      ? override.dirtyTreeScoped.map(sanitizeProvenanceText).filter(Boolean)
+      : [],
+    ...(override.dirtyTreeTruncated === true
+      ? { dirtyTreeTruncated: true }
+      : {}),
+    ...(typeof override.commitOnRemote === 'boolean'
+      ? { commitOnRemote: override.commitOnRemote }
+      : {}),
+    ...(override.prUrl !== undefined
+      ? { prUrl: sanitizeProvenanceText(override.prUrl) }
+      : {}),
+    ...(Array.isArray(override.captureErrors)
+      ? {
+          captureErrors: override.captureErrors.map(sanitizeProvenanceText),
+        }
+      : {}),
+    ...(overrideReason
+      ? { reason: overrideReason }
+      : fallbackReason
+      ? { reason: fallbackReason }
+      : {}),
+  }
+}
+
+let reasonWarningEmitted = false
+
+/**
+ * Warns once per process that a proposal carried no stated reason.
+ *
+ * Once, not per proposal: a fleet sweep proposes on 40+ networks in one run, and
+ * repeating the same line 40 times trains operators to scroll past it. The
+ * per-proposal record is the absent `provenance.reason` field, which is what
+ * the adoption report counts — so suppressing the repeat loses no information.
+ *
+ * @param ticketUrl - Identifies the first proposal that triggered the warning.
+ */
+function warnMissingReasonOnce(ticketUrl: string): void {
+  if (reasonWarningEmitted) return
+  reasonWarningEmitted = true
+  consola.warn(formatReasonWarning(ticketUrl))
+}
+
+/**
+ * Assembles the provenance block stored with a proposal.
+ *
+ * Never throws and never blocks a proposal: the storage funnel it feeds already
+ * aborts a deployment when it fails, so a git probe must not be able to take a
+ * production deploy down. Total failure yields sentinel values with the cause
+ * in `captureErrors`, which is strictly more useful than an absent field.
+ * @param options - Rationale and the test override seam.
+ * @returns A provenance block, populated as far as capture succeeded.
+ */
+export function buildProposalProvenance(
+  options?: IProposalProvenanceOptions
+): IProposalProvenance {
+  // The environment is the only channel the bash deploy chain can supply a
+  // rationale through without touching any script signature.
+  const reason = normalizeProposalReason(
+    firstSupplied('--reason', options?.reason, process.env.SAFE_PROPOSAL_REASON)
+  )
+
+  // Recorded, not validated, here: this function must never block a proposal,
+  // so the refusal lives in storeTransactionInMongoDB, which has already
+  // resolved the link by the time it calls this.
+  const ticket = options?.ticketUrl ? { ticketUrl: options.ticketUrl } : {}
+
+  // Copied and sanitized, never returned by reference: the caller keeps
+  // ownership of the object it passed in, and a future production caller of
+  // the seam cannot store raw control characters either.
+  if (options?.override)
+    return { ...sanitizeOverride(options.override, reason), ...ticket }
+
+  try {
+    return {
+      ...captureGitProvenance(),
+      ...(reason ? { reason } : {}),
+      ...ticket,
+    }
+  } catch (error) {
+    // Backstop only — capture is fail-soft internally and should not reach here.
+    return {
+      capturedAt: new Date().toISOString(),
+      actor: PROVENANCE_UNKNOWN,
+      proposerHandle: PROVENANCE_UNKNOWN,
+      gitCommit: PROVENANCE_UNKNOWN,
+      gitBranch: PROVENANCE_UNKNOWN,
+      dirtyTreeScoped: [],
+      captureErrors: [`provenance capture failed: ${error}`],
+      ...(reason ? { reason } : {}),
+      ...ticket,
+    }
+  }
+}
+
+const INTENT_INDEX_NAME = 'unique_pending_intent_hash'
+const IN_FLIGHT_NONCE_INDEX_NAME = 'unique_inflight_safe_nonce_ci'
+/**
+ * The pre-`_ci` name. A build from before the collation left this index in place
+ * and it is not dropped, so it can still be the one that rejects an insert.
+ */
+const LEGACY_IN_FLIGHT_NONCE_INDEX_NAME = 'unique_inflight_safe_nonce'
+const NONCE_KEY_PATH = 'safeTx.data.nonce'
+
+/**
+ * Case-insensitive comparison for the in-flight nonce index and every query that
+ * has to agree with it.
+ *
+ * `propose-to-safe-tron.ts` stores a Safe address as lowercase hex
+ * (`tronBase58ToEvm20Hex`) while the `initializeSafeClient` path stores the
+ * checksummed form, so one Safe has two spellings in this collection. Comparing
+ * raw makes a nonce collision on Tron deterministic rather than merely possible.
+ */
+const ADDRESS_COLLATION = { locale: 'en', strength: 2 } as const
+
+/** Which unique index rejected an insert, when one did. */
+export type DuplicateKeyKind =
+  | 'intent'
+  | 'in-flight-nonce'
+  | 'other'
+  | 'not-duplicate'
+
+/**
+ * Identifies the unique index behind a MongoDB duplicate-key error.
+ *
+ * An intent collision is the same proposal arriving twice and is safely
+ * idempotent; a nonce collision is a *different* proposal that won the race for
+ * that nonce. Treating the second as the first would report success for a
+ * proposal that was never stored.
+ *
+ * `keyPattern` is what a current driver supplies; the index name in the message
+ * is the fallback for an older driver or a mongos that omits it.
+ *
+ * @param error - the value thrown by an insert.
+ * @returns which index rejected the write, or that this was not a duplicate-key error.
+ */
+export const classifyDuplicateKeyError = (error: unknown): DuplicateKeyKind => {
+  if (!(error instanceof Error) || !('code' in error)) return 'not-duplicate'
+  if ((error as { code?: unknown }).code !== 11000) return 'not-duplicate'
+
+  const keyPattern = (error as { keyPattern?: Record<string, unknown> })
+    .keyPattern
+  if (keyPattern) {
+    if ('intentHash' in keyPattern) return 'intent'
+    if (NONCE_KEY_PATH in keyPattern) return 'in-flight-nonce'
+
+    return 'other'
+  }
+
+  if (
+    error.message.includes(IN_FLIGHT_NONCE_INDEX_NAME) ||
+    error.message.includes(LEGACY_IN_FLIGHT_NONCE_INDEX_NAME)
+  )
+    return 'in-flight-nonce'
+  if (error.message.includes(INTENT_INDEX_NAME)) return 'intent'
+
+  return 'other'
+}
+
+/**
+ * Stores a Safe transaction in MongoDB
+ * Skips storage if a pending proposal with the same intent already exists
+ * @param pendingTransactions - MongoDB collection
+ * @param safeAddress - Address of the Safe
+ * @param network - Network name
+ * @param chainId - Chain ID
+ * @param safeTx - The transaction to store
+ * @param safeTxHash - Hash of the transaction
+ * @param proposer - Address of the proposer
+ * @param parkedTaskRefs - Origin-PR links when this is a drained facet removal
+ * @param provenanceOptions - Rationale and the provenance test override seam
+ * @returns Result of the MongoDB insert operation, or null if duplicate exists
+ */
+export async function storeTransactionInMongoDB(
+  pendingTransactions: Collection<ISafeTxDocument>,
+  safeAddress: Address,
+  network: string,
+  chainId: number,
+  safeTx: ISafeTransaction,
+  safeTxHash: Hex,
+  proposer: Address,
+  parkedTaskRefs?: IParkedTaskRef[],
+  provenanceOptions?: IProposalProvenanceOptions
+): Promise<InsertOneResult<ISafeTxDocument> | null> {
+  // Compute intent hash for duplicate detection
+  const intentHash = computeProposalIntentHash(
+    network,
+    chainId,
+    safeAddress,
+    safeTx.data.to,
+    safeTx.data.value,
+    safeTx.data.data,
+    safeTx.data.operation
+  )
+
+  // Before anything is written. Every proposal funnel reaches this function, so
+  // this is the one place a link can be required without each caller opting in —
+  // and a refusal after the insert would leave an unlinked proposal holding a
+  // nonce.
+  const intent = resolveProposalIntent({
+    ticket: provenanceOptions?.ticket,
+    envTicket: process.env.SAFE_PROPOSAL_TICKET,
+    reason: provenanceOptions?.reason,
+    envReason: process.env.SAFE_PROPOSAL_REASON,
+  })
+
+  if (intent.reasonMissing) warnMissingReasonOnce(intent.ticketUrl)
+
+  // Never derived from `safeTx`: the Tron route hands in a cast-together object
+  // whose shape does not match the type.
+  // The resolved reason, not the raw one: re-deriving it here would let the
+  // stored field disagree with the warning above about whether one was given.
+  const provenance = buildProposalProvenance({
+    ...provenanceOptions,
+    reason: intent.reason,
+    ticketUrl: intent.ticketUrl,
+  })
+
+  const txDoc = {
+    safeAddress,
+    network: network.toLowerCase(),
+    chainId,
+    safeTx,
+    safeTxHash,
+    proposer,
+    timestamp: new Date(),
+    status: 'pending' as const,
+    intentHash,
+    provenance,
+    ...(parkedTaskRefs && parkedTaskRefs.length > 0 ? { parkedTaskRefs } : {}),
+  } satisfies ISafeTxDocument
+
+  // The nonce-collision verdict is carried out of `retry` rather than thrown
+  // inside it: retrying is what `retry` exists for, and re-inserting a document
+  // whose nonce is already taken can only fail again.
+  const outcome = await retry(
+    async (): Promise<
+      InsertOneResult<ISafeTxDocument> | null | 'in-flight-nonce-taken'
+    > => {
+      try {
+        const insertResult = await pendingTransactions.insertOne(txDoc)
+        return insertResult
+      } catch (error: unknown) {
+        const duplicate = classifyDuplicateKeyError(error)
+
+        if (duplicate === 'intent') {
+          consola.warn(
+            `Duplicate pending proposal detected - skipping storage.\n` +
+              `  Intent hash: ${intentHash}`
+          )
+          return null
+        }
+
+        if (duplicate === 'in-flight-nonce') return 'in-flight-nonce-taken'
+
+        throw error
+      }
+    }
+  )
+
+  // Deliberately not `null`: null means "already proposed, nothing to do", and
+  // here a *different* proposal holds this nonce. The nonce is covered by
+  // safeTxHash, so it cannot be bumped without re-signing — the proposal has to
+  // be rebuilt, which only the caller can do.
+  if (outcome === 'in-flight-nonce-taken')
+    throw new Error(
+      `Nonce ${safeTx.data.nonce} is already taken by another in-flight proposal on ${network} ` +
+        `(Safe ${safeAddress}). Another proposer won the race for it. Re-run the proposal so a ` +
+        `fresh nonce is derived; nothing was stored.`
+    )
+
+  return outcome
+}
+
+/**
+ * Ensures the partial unique index exists on intentHash for pending proposals
+ * This index guarantees no duplicate pending proposals can exist at the database level
+ * @param pendingTransactions - MongoDB collection
+ */
+async function ensurePendingProposalIndex(
+  pendingTransactions: Collection<ISafeTxDocument>
+): Promise<void> {
+  try {
+    await pendingTransactions.createIndex(
+      { intentHash: 1 },
+      {
+        unique: true,
+        partialFilterExpression: {
+          status: 'pending',
+          intentHash: { $exists: true },
+        },
+        name: INTENT_INDEX_NAME,
+      }
+    )
+  } catch (error: unknown) {
+    const code =
+      error instanceof Error && 'code' in error
+        ? (error as { code: number }).code
+        : undefined
+    // 85 = exists with same options; 86 = exists with a drifted definition —
+    // definition drift must not hard-fail every Safe script fleet-wide.
+    if (code === 85 || code === 86) {
+      if (code === 86)
+        consola.warn(
+          'The pending-proposal dedup index exists with a different definition; relying on the existing index:',
+          error
+        )
+      return
+    }
+    // Unauthorized (code 13): a permission-limited role cannot create indexes,
+    // which must not block proposing — the application-level dedup check still
+    // works and the index exists in every long-lived environment.
+    if (code === 13) {
+      consola.warn(
+        'Cannot verify the pending-proposal dedup index (role lacks createIndex); relying on the application-level duplicate check:',
+        error
+      )
+      return
+    }
+    // Anything else (network failure, timeout) is a real connection problem —
+    // rethrow so the caller closes the client instead of proceeding without the
+    // database-level duplicate-prevention guarantee.
+    throw error
+  }
+}
+
+/** Why `createIndex` failed, in terms of what the caller should do about it. */
+export type IndexEnsureFailure =
+  | 'drifted'
+  | 'unauthorized'
+  | 'colliding-data'
+  | 'fatal'
+
+/**
+ * Maps a `createIndex` error code to an outcome.
+ *
+ * 85 and 86 share an outcome deliberately. MongoDB 8.2 answers every mismatch —
+ * options or key — with 86, and an identical request with no error at all, so 85
+ * is unreachable here; but the documented split puts option conflicts (collation
+ * among them) under 85, and a server that did return it must not take a
+ * different path. Neither is fatal: this index's name encodes its definition, so
+ * a conflict means the definition was changed without renaming, and refusing
+ * would throw out of `getSafeMongoCollection` — which every Safe script calls,
+ * including the ones that confirm and execute proposals already pending.
+ *
+ * @param code - the `code` property of the thrown error, if it had one.
+ * @returns what the caller should do about it.
+ */
+export const classifyIndexEnsureFailure = (
+  code: number | undefined
+): IndexEnsureFailure => {
+  if (code === 85 || code === 86) return 'drifted'
+  if (code === 13) return 'unauthorized'
+  if (code === 11000) return 'colliding-data'
+
+  return 'fatal'
+}
+
+/**
+ * Creates the index, in exactly one place so a replacement cannot drift from the
+ * definition the first attempt used.
+ *
+ * @param pendingTransactions - MongoDB collection.
+ */
+const createInFlightNonceIndex = async (
+  pendingTransactions: Collection<ISafeTxDocument>
+): Promise<void> => {
+  await pendingTransactions.createIndex(
+    {
+      safeAddress: 1,
+      network: 1,
+      chainId: 1,
+      'safeTx.data.nonce': 1,
+    },
+    {
+      unique: true,
+      partialFilterExpression: { status: { $in: ['pending', 'submitted'] } },
+      name: IN_FLIGHT_NONCE_INDEX_NAME,
+      collation: ADDRESS_COLLATION,
+    }
+  )
+}
+
+/**
+ * Ensures the in-flight nonce is unique per Safe at the database level.
+ *
+ * `getNextNonce` reads the highest in-flight nonce and the caller then inserts,
+ * so two proposers running concurrently read the same maximum and mint the same
+ * nonce. The existing intent index does not catch it: the two proposals differ,
+ * so both inserts satisfy it. Only one of them can ever execute, and the other
+ * sits pending as a proposal that will always revert.
+ *
+ * `executed` and `reverted` rows are deliberately outside the filter — history
+ * legitimately holds many rows per nonce, and constraining it would make the
+ * index unbuildable.
+ *
+ * Compares under {@link ADDRESS_COLLATION}, as does `getNextNonce`, so the index
+ * and the read that feeds it cannot disagree about which rows exist.
+ *
+ * The `_ci` suffix is load-bearing: it ties the name to the definition, so an
+ * index built to any other definition carries a different name and needs neither
+ * detection nor replacement. A pre-`_ci` index left behind by an earlier build is
+ * strictly weaker than this one and constrains a subset of the same writes, so it
+ * is redundant rather than harmful.
+ * @param pendingTransactions - MongoDB collection
+ */
+async function ensureInFlightNonceIndex(
+  pendingTransactions: Collection<ISafeTxDocument>
+): Promise<void> {
+  try {
+    await createInFlightNonceIndex(pendingTransactions)
+  } catch (error: unknown) {
+    const code =
+      error instanceof Error && 'code' in error
+        ? (error as { code: number }).code
+        : undefined
+
+    // Every branch below warns and returns rather than throwing. Nothing is ever
+    // dropped either: replacing an index can leave the collection with no
+    // constraint at all when the rebuild fails on colliding data.
+    switch (classifyIndexEnsureFailure(code)) {
+      case 'drifted':
+        consola.warn(
+          `${IN_FLIGHT_NONCE_INDEX_NAME} exists with a definition this build did not ask for. Its name ` +
+            `is meant to encode its definition, so the definition was changed without renaming it. ` +
+            `Case-insensitive in-flight nonce uniqueness may NOT be enforced — inspect the index.`,
+          error
+        )
+        return
+
+      case 'unauthorized':
+        consola.warn(
+          'Cannot verify the in-flight nonce index (role lacks createIndex); a nonce collision would not be prevented at insert time:',
+          error
+        )
+        return
+
+      case 'colliding-data':
+        consola.warn(
+          `Could not build ${IN_FLIGHT_NONCE_INDEX_NAME}: the collection already holds two in-flight ` +
+            `proposals sharing a nonce. Nonce uniqueness is NOT enforced until those rows are resolved. ` +
+            `List them with 'bunx tsx script/deploy/safe/report-nonce-collisions.ts'.`,
+          error
+        )
+        return
+
+      // 'fatal' — a real connection fault. Rethrown so the caller closes the
+      // client. Default rather than a named case so an outcome added to the
+      // union later is treated as fatal until it is handled explicitly.
+      default:
+        throw error
+    }
+  }
+}
+
+/**
+ * Gets a MongoDB client and collection for Safe transactions.
+ *
+ * Connects to the Safe proposal database using SC_MONGODB_URI. Since the legacy
+ * VPN was retired, this database is reachable only through the lifi-connect
+ * tunnel (`lifi-connect prod smart-contracts`); SC_MONGODB_URI must point at the
+ * forwarded localhost port.
+ * @returns MongoDB client and pendingTransactions collection
+ * @throws Error if SC_MONGODB_URI is unset or the database cannot be reached
+ */
+export async function getSafeMongoCollection(): Promise<{
+  client: MongoClient
+  pendingTransactions: Collection<ISafeTxDocument>
+}> {
+  if (!process.env.SC_MONGODB_URI)
+    throw new Error('SC_MONGODB_URI environment variable is required')
+
+  // The Safe proposal database sits behind the lifi-connect tunnel; fail fast
+  // with an actionable message when the tunnel isn't up instead of hanging on
+  // the driver's default 30s server-selection timeout.
+  const client = new MongoClient(process.env.SC_MONGODB_URI, {
+    serverSelectionTimeoutMS: 10_000, // 10 seconds
+  })
+  try {
+    await client.connect()
+  } catch (error) {
+    await client.close().catch(() => undefined)
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new Error(
+      'Could not reach the Safe MongoDB via lifi-connect. Start the tunnel with ' +
+        '`lifi-connect prod smart-contracts` and ensure SC_MONGODB_URI points at ' +
+        'the forwarded localhost port. Setup guide: ' +
+        'https://app.notion.com/p/lifi/Accessing-Resources-with-Port-Forwarding-396f0ff14ac78098bf13f06d4a428845 ' +
+        `- Underlying error: ${detail}`
+    )
+  }
+  const db = client.db('sc_private')
+  const pendingTransactions = db.collection<ISafeTxDocument>(
+    'pendingTransactions'
+  )
+
+  // Ensure the partial unique index exists for duplicate prevention. The client is
+  // already connected here, so a failure must close it before rethrowing — an
+  // orphaned client is unreachable to the caller and keeps the process alive.
+  try {
+    await ensurePendingProposalIndex(pendingTransactions)
+    await ensureInFlightNonceIndex(pendingTransactions)
+  } catch (error) {
+    await client.close().catch(() => undefined)
+    throw error
+  }
+
+  return { client, pendingTransactions }
+}
+
+/**
+ * Gets the next nonce for a Safe transaction
+ * @param pendingTransactions - MongoDB collection
+ * @param safeAddress - Address of the Safe
+ * @param network - Network name
+ * @param chainId - Chain ID
+ * @param currentNonce - Current nonce from the Safe contract
+ * @returns The next nonce to use
+ */
+export async function getNextNonce(
+  pendingTransactions: Collection<ISafeTxDocument>,
+  safeAddress: string,
+  network: string,
+  chainId: number,
+  currentNonce: bigint
+): Promise<bigint> {
+  // Include 'submitted' rows: a tx broadcast but not yet confirmed still has
+  // its Safe nonce in flight, so a new proposal must not collide with it.
+  // Collated to match the unique index: an uncollated read is blind to a row
+  // spelling the same Safe differently, and would keep handing back a nonce the
+  // index rejects.
+  const latestTx = await pendingTransactions
+    .find({
+      safeAddress,
+      network: network.toLowerCase(),
+      chainId,
+      status: { $in: ['pending', 'submitted'] },
+    })
+    .collation(ADDRESS_COLLATION)
+    .sort({ 'safeTx.data.nonce': -1 })
+    .limit(1)
+    .toArray()
+
+  if (latestTx.length > 0) {
+    const tx = latestTx[0]
+    if (!tx) throw new Error('Latest transaction not found')
+    const pendingNonce = BigInt(tx.safeTx?.data?.nonce || 0)
+    // Clamp to on-chain nonce: if the DB-derived nonce is behind the chain
+    // (stale pending rows), use the on-chain nonce so we don't mint another
+    // stale proposal.
+    const nextNonce =
+      pendingNonce + 1n > currentNonce ? pendingNonce + 1n : currentNonce
+    consola.debug(
+      `[getNextNonce] found pending proposal with nonce ${pendingNonce} → assigning ${nextNonce} (on-chain nonce: ${currentNonce})`
+    )
+    return nextNonce
+  }
+  consola.debug(
+    `[getNextNonce] no pending proposals found → using on-chain nonce ${currentNonce}`
+  )
+  return currentNonce
+}
+
+/**
+ * Gets all pending transactions for specified networks
+ * @param pendingTransactions - MongoDB collection
+ * @param networks - List of network names
+ * @returns Transactions grouped by network
+ */
+export async function getPendingTransactionsByNetwork(
+  pendingTransactions: Collection<ISafeTxDocument>,
+  networks: string[]
+): Promise<Record<string, ISafeTxDocument[]>> {
+  const allPendingTxs = await pendingTransactions
+    .find<ISafeTxDocument>({
+      network: { $in: networks.map((n) => n.toLowerCase()) },
+      status: 'pending',
+    })
+    .toArray()
+
+  // Group transactions by network
+  const txsByNetwork: Record<string, ISafeTxDocument[]> = {}
+  for (const tx of allPendingTxs) {
+    const network = tx.network.toLowerCase()
+    if (!txsByNetwork[network]) txsByNetwork[network] = []
+
+    txsByNetwork[network].push(tx)
+  }
+
+  // Sort transactions by nonce for each network
+  for (const network in txsByNetwork) {
+    const txs = txsByNetwork[network]
+    if (!txs) throw new Error(`Missing transactions for network ${network}`)
+    txs.sort((a, b) => {
+      if (a.safeTx.data.nonce < b.safeTx.data.nonce) return -1
+      if (a.safeTx.data.nonce > b.safeTx.data.nonce) return 1
+      return 0
+    })
+  }
+
+  return txsByNetwork
+}
+
+export interface ISafeSigningOptions {
+  ledger?: boolean
+  /** Use Ledger Live's derivation path for `accountIndex`. */
+  ledgerLive?: boolean
+  /** Accepted as a string so a CLI value reaches the validation below unaltered. */
+  accountIndex?: number | string
+  /** Mutually exclusive with `ledgerLive`. */
+  derivationPath?: string
+  envPrivateKey?: string
+  /** Named in the no-key error so it points at the variable the caller read. */
+  envPrivateKeyName?: string
+}
+
+export interface IResolvedSafeSigning {
+  useLedger: boolean
+  /** Undefined when signing with a Ledger — there is no key to hold. */
+  privateKey?: string
+  ledgerOptions: {
+    ledgerLive: boolean
+    accountIndex: number
+    derivationPath?: string
+  }
+}
+
+/**
+ * Reads a Ledger account index, refusing anything that is not one.
+ *
+ * `Number('')` is 0, so a CLI that delivers an empty string
+ * (`--accountIndex "$UNSET_VAR"`) yields account 0. Anything else `Number()`
+ * produces is taken by the BIP32 parser as given — a `NaN` segment is dropped
+ * from the path entirely, a fraction is truncated and a negative wraps — so
+ * each derives a different, valid-looking address with no error at any layer.
+ *
+ * @param raw - The value as the caller received it, unconverted.
+ * @returns The index.
+ * @throws If it is not a non-negative integer.
+ */
+export const parseAccountIndex = (raw: number | string | undefined): number => {
+  const value = raw ?? 0
+  const parsed =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && value.trim() !== ''
+      ? Number(value)
+      : NaN
+
+  if (!Number.isInteger(parsed) || parsed < 0)
+    throw new Error(
+      `accountIndex must be a non-negative integer, got '${String(raw)}'`
+    )
+
+  return parsed
+}
+
+/**
+ * Decides how a Safe proposal gets signed.
+ *
+ * Every combination it refuses would otherwise have signed from an address the
+ * operator did not choose, with no error at any layer.
+ *
+ * @param options - the CLI/caller flags plus the environment key to fall back on.
+ * @returns what to hand `initializeSafeClient`.
+ * @throws If both path options are given, if `derivationPath` or `ledgerLive`
+ * is given without `ledger`, if `accountIndex` is not a non-negative integer,
+ * if a non-zero `accountIndex` is given without `ledgerLive`, if
+ * `derivationPath` is given but blank, or if neither a Ledger nor a key is
+ * available.
+ */
+export const resolveSafeSigningOptions = (
+  options: ISafeSigningOptions
+): IResolvedSafeSigning => {
+  const useLedger = options.ledger === true
+
+  if (options.derivationPath && options.ledgerLive)
+    throw new Error(
+      "Cannot use both 'derivationPath' and 'ledgerLive' — they specify different derivation paths"
+    )
+
+  // Refused rather than ignored: silently dropping a derivation path the
+  // operator typed is how someone believes they signed from one account and
+  // signed from another.
+  if (!useLedger && (options.derivationPath || options.ledgerLive))
+    throw new Error(
+      "Ledger options were given without '--ledger', so nothing would use them. Add --ledger, or drop the Ledger options."
+    )
+
+  if (!useLedger && !options.envPrivateKey)
+    throw new Error(
+      `Missing ${
+        options.envPrivateKeyName ?? 'private key'
+      } in environment. Set it, or pass --ledger to sign with a hardware wallet.`
+    )
+
+  // Ahead of the two checks below, which read the parsed value.
+  const accountIndex = parseAccountIndex(options.accountIndex)
+
+  // Refused rather than ignored: `getLedgerAccount` reads `accountIndex` only on
+  // the Ledger Live path, so without it an operator who asked for account 3
+  // signs from account 0 and is told nothing.
+  if (useLedger && accountIndex !== 0 && !options.ledgerLive)
+    throw new Error(
+      "'accountIndex' only selects an account on the Ledger Live path. Add --ledgerLive, or drop --accountIndex."
+    )
+
+  // An empty string is a value the operator typed, not an absence: treating it
+  // as unset would send `--derivationPath ""` down the default-path branch.
+  if (
+    options.derivationPath !== undefined &&
+    options.derivationPath.trim() === ''
+  )
+    throw new Error("'derivationPath' was given but is empty.")
+
+  // Only `accountIndex` can still reach here on the key path — the other
+  // sub-options are refused above — and it is zeroed so the result cannot
+  // describe a derivation that never happened.
+  const ledgerOptions = useLedger
+    ? {
+        ledgerLive: options.ledgerLive === true,
+        accountIndex,
+        ...(options.derivationPath
+          ? { derivationPath: options.derivationPath }
+          : {}),
+      }
+    : { ledgerLive: false, accountIndex: 0 }
+
+  return {
+    useLedger,
+    ...(useLedger ? {} : { privateKey: options.envPrivateKey }),
+    ledgerOptions,
+  }
+}
+
+/**
+ * Initializes a Safe client for a specific network
+ * @param network - Network name
+ * @param privateKey - Private key for signing (optional if useLedger is true)
+ * @param rpcUrl - Optional RPC URL override
+ * @param useLedger - Whether to use a Ledger device for signing
+ * @param ledgerOptions - Options for Ledger connection
+ * @returns Initialized SafeClient instance and chain information
+ */
+export async function initializeSafeClient(
+  network: string,
+  privateKey?: string,
+  rpcUrl?: string,
+  useLedger?: boolean,
+  ledgerOptions?: {
+    derivationPath?: string
+    ledgerLive?: boolean
+    accountIndex?: number
+  },
+  safeAddress?: Address,
+  account?: Account
+): Promise<{
+  safe: SafeClient
+  chain: Chain
+  safeAddress: Address
+}> {
+  const chain = getViemChainForNetworkName(network)
+  const rawSafeAddress =
+    safeAddress ?? networks[network.toLowerCase()]?.safeAddress
+
+  if (!rawSafeAddress)
+    throw new Error(`No Safe address configured for network ${network}`)
+
+  const finalSafeAddress = normalizeAddressForNetwork(network, rawSafeAddress)
+
+  const parsedRpcUrl = rpcUrl || chain.rpcUrls.default.http[0]
+  if (!parsedRpcUrl) throw new Error(`No RPC URL for network ${network}`)
+
+  // Initialize Safe with Viem
+  try {
+    const safe = await SafeClient.init({
+      provider: parsedRpcUrl,
+      privateKey,
+      safeAddress: finalSafeAddress,
+      useLedger,
+      ledgerOptions,
+      account,
+      networkName: network.toLowerCase(),
+    })
+
+    return { safe, chain, safeAddress: finalSafeAddress }
+  } catch (error: unknown) {
+    const errorMsg = error instanceof Error ? error.message : String(error)
+    consola.error(`Error encountered while setting up Safe: ${error}`)
+    throw new Error(`Failed to initialize Safe for ${network}: ${errorMsg}`)
+  }
+}
+
+interface ISafeClientBundle {
+  safe: SafeClient
+  chain: Chain
+  safeAddress: Address
+}
+
+const safeClientPool = new Map<string, Promise<ISafeClientBundle>>()
+
+/**
+ * Builds the pool key identifying one Safe client: network + Safe address +
+ * signer identity.
+ * @param network - Network name
+ * @param safeAddress - Normalized Safe address
+ * @param account - Pre-created signer account, when available
+ * @param privateKey - Raw private key; only its derived address enters the key
+ * @returns Pool key string
+ */
+export function safeClientPoolKey(
+  network: string,
+  safeAddress: Address,
+  account?: Account,
+  privateKey?: string
+): string {
+  // Never key on raw private-key material: derive the (non-secret) address,
+  // which is also collision-free where a key prefix is not.
+  const accountPart =
+    account?.address.toLowerCase() ??
+    (privateKey
+      ? privateKeyToAccount(
+          (privateKey.startsWith('0x') ? privateKey : `0x${privateKey}`) as Hex
+        ).address.toLowerCase()
+      : 'ledger')
+  return `${network.toLowerCase()}:${safeAddress.toLowerCase()}:${accountPart}`
+}
+
+/**
+ * Returns a pooled Safe client for the run, reusing an existing init when possible.
+ */
+export async function getOrInitializeSafeClient(
+  network: string,
+  privateKey?: string,
+  rpcUrl?: string,
+  useLedger?: boolean,
+  ledgerOptions?: {
+    derivationPath?: string
+    ledgerLive?: boolean
+    accountIndex?: number
+  },
+  safeAddress?: Address,
+  account?: Account
+): Promise<ISafeClientBundle> {
+  const rawSafeAddress =
+    safeAddress ?? networks[network.toLowerCase()]?.safeAddress
+  if (!rawSafeAddress)
+    throw new Error(`No Safe address configured for network ${network}`)
+
+  const finalSafeAddress = normalizeAddressForNetwork(network, rawSafeAddress)
+  const key = safeClientPoolKey(network, finalSafeAddress, account, privateKey)
+  return getOrCreatePooledPromise(safeClientPool, key, () =>
+    initializeSafeClient(
+      network,
+      privateKey,
+      rpcUrl,
+      useLedger,
+      ledgerOptions,
+      safeAddress,
+      account
+    )
+  )
+}
+
+/**
+ * Returns the pooled promise for `key`, creating it via `factory` on a miss.
+ * A rejected promise evicts itself (guarded against replacing a newer entry)
+ * so a transient failure never poisons later calls for the same key.
+ */
+export function getOrCreatePooledPromise<T>(
+  pool: Map<string, Promise<T>>,
+  key: string,
+  factory: () => Promise<T>
+): Promise<T> {
+  const cached = pool.get(key)
+  if (cached) return cached
+
+  const promise = factory().catch((error: unknown) => {
+    if (pool.get(key) === promise) pool.delete(key)
+    throw error
+  })
+  pool.set(key, promise)
+  return promise
+}
+
+/** Upper bound on how long pooled-client cleanup may run before it is abandoned. */
+export const POOL_CLEANUP_TIMEOUT_MS = 5_000 // 5 seconds
+
+/**
+ * Closes all pooled Safe clients. Call once at the end of a confirm-safe-tx run.
+ * @param pool - Pool to drain; defaults to the module-level pool
+ * @param timeoutMs - Cleanup deadline; a slow/hung in-flight init must not stall exit
+ */
+export async function releaseAllPooledSafeClients(
+  pool: Map<string, Promise<ISafeClientBundle>> = safeClientPool,
+  timeoutMs: number = POOL_CLEANUP_TIMEOUT_MS
+): Promise<void> {
+  const closes = [...pool.values()].map(async (promise) => {
+    try {
+      const { safe } = await promise
+      await safe.cleanup()
+    } catch (error: unknown) {
+      const errorMsg = error instanceof Error ? error.message : String(error)
+      consola.warn(`Warning during pooled SafeClient cleanup: ${errorMsg}`)
+    }
+  })
+
+  // An in-flight prefetch init against a slow/hung RPC would otherwise block
+  // shutdown (and, on error paths, the operator's exit) indefinitely.
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      consola.warn(
+        `Pooled SafeClient cleanup timed out after ${timeoutMs}ms; abandoning remaining closes`
+      )
+      resolve()
+    }, timeoutMs)
+  })
+  try {
+    await Promise.race([Promise.allSettled(closes), deadline])
+  } finally {
+    if (timer) clearTimeout(timer)
+    pool.clear()
+  }
+}
+
+/**
+ * Gets the private key from environment or argument
+ * @param privateKeyArg - Private key argument from command line
+ * @param keyType - Type of key to use from environment
+ * @returns The private key
+ */
+export function getPrivateKey(
+  keyType:
+    | 'PRIVATE_KEY'
+    | 'PRIVATE_KEY_PRODUCTION'
+    | 'SAFE_SIGNER_PRIVATE_KEY' = 'PRIVATE_KEY_PRODUCTION',
+  privateKeyArg?: string
+): string {
+  const privateKey = privateKeyArg || process.env[keyType]
+
+  if (!privateKey)
+    throw new Error(
+      `Private key is missing, either provide it as argument or add ${keyType} to your .env`
+    )
+
+  return privateKey.startsWith('0x') ? privateKey.slice(2) : privateKey
+}
+
+/**
+ * Gets the list of networks to process
+ * @param networkArg - Network argument from command line
+ * @returns List of networks to process
+ */
+export function getNetworksToProcess(networkArg?: string): string[] {
+  if (networkArg) return [networkArg]
+
+  return Object.keys(networks).filter(
+    (network) =>
+      network !== 'localanvil' && // pre-commit-checker: not a secret — network name filter
+      networks[network.toLowerCase()]?.status === 'active'
+  )
+}
+
+/**
+ * Gets networks that have pending transactions and exist in networks.json
+ * @param pendingTransactions - MongoDB collection
+ * @returns List of network names with pending transactions
+ */
+export async function getNetworksWithPendingTransactions(
+  pendingTransactions: Collection<ISafeTxDocument>
+): Promise<string[]> {
+  // Query MongoDB to get distinct networks that have pending transactions
+  const networksWithPendingTxs = await pendingTransactions.distinct('network', {
+    status: 'pending',
+  })
+
+  // Filter to only include networks that exist in networks.json and are active
+  const validNetworks = networksWithPendingTxs.filter((network: string) => {
+    const networkConfig = networks[network.toLowerCase()]
+    return networkConfig && networkConfig.status === 'active'
+  })
+
+  return validNetworks
+}
+
+/**
+ * Gets networks where the user can take action (is a Safe owner AND has actionable transactions).
+ * Ownership is read from the chain with a read-only client, so no signer material is needed here.
+ * @param pendingTransactions - MongoDB collection
+ * @param signerAddress - Address of the signer to check ownership for
+ * @param rpcUrl - Optional RPC URL override
+ * @returns List of network names where the signer can take action
+ */
+export async function getNetworksWithActionableTransactions(
+  pendingTransactions: Collection<ISafeTxDocument>,
+  signerAddress: Address,
+  rpcUrl?: string
+): Promise<string[]> {
+  // First, get all networks with pending transactions
+  const networksWithPendingTxs = await getNetworksWithPendingTransactions(
+    pendingTransactions
+  )
+
+  if (networksWithPendingTxs.length === 0) return []
+
+  // Get all pending transactions grouped by network
+  const txsByNetwork = await getPendingTransactionsByNetwork(
+    pendingTransactions,
+    networksWithPendingTxs
+  )
+
+  // Check ownership and actionable transactions for each network in parallel
+  // Use Promise.allSettled to handle errors gracefully and get detailed results
+  const networkResults = await Promise.allSettled(
+    networksWithPendingTxs.map(async (network: string) => {
+      // Get pending transactions for this network
+      const networkTxs = txsByNetwork[network.toLowerCase()]
+      if (!networkTxs || networkTxs.length === 0) {
+        consola.debug(`No pending transactions for ${network}`)
+        return { network, actionable: false, reason: 'no_pending_txs' }
+      }
+
+      // Use the Safe address from the transaction document (not networks.json)
+      // This matches the behavior in processTxs
+      const txSafeAddress = networkTxs[0]?.safeAddress as Address
+      if (!txSafeAddress) {
+        consola.debug(`No Safe address in transaction document for ${network}`)
+        return { network, actionable: false, reason: 'no_safe_address_in_tx' }
+      }
+
+      const publicClient = buildReadOnlyClient(network, rpcUrl)
+      const normalizedSafeAddress = normalizeAddressForNetwork(
+        network,
+        txSafeAddress
+      )
+
+      let owners: Address[]
+      let threshold: number
+      try {
+        ;[owners, threshold] = await Promise.all([
+          publicClient.readContract({
+            address: normalizedSafeAddress,
+            abi: SAFE_SINGLETON_ABI,
+            functionName: 'getOwners',
+          }) as Promise<Address[]>,
+          publicClient
+            .readContract({
+              address: normalizedSafeAddress,
+              abi: SAFE_SINGLETON_ABI,
+              functionName: 'getThreshold',
+            })
+            .then(Number),
+        ])
+      } catch (error: unknown) {
+        const errorMsg = error instanceof Error ? error.message : String(error)
+        throw new Error(`Failed to read Safe state on ${network}: ${errorMsg}`)
+      }
+
+      const isOwner = isAddressASafeOwner(owners, signerAddress)
+      if (!isOwner) {
+        consola.warn(
+          `[${network}] ⚠️  Signer ${signerAddress} is not an owner of Safe ${txSafeAddress}`
+        )
+        consola.warn(`[${network}]    Safe owners: ${owners.join(', ')}`)
+        return { network, actionable: false, reason: 'not_owner' }
+      }
+
+      let hasActionableTx = false
+      for (const tx of networkTxs) {
+        const hasSignedAlready = isDocSignedBySigner(tx, signerAddress)
+        const canExecute = hasEnoughSignaturesInDoc(tx, threshold)
+
+        if (canExecute) {
+          hasActionableTx = true
+          break
+        }
+
+        if (!hasSignedAlready && getSignatureCountFromDoc(tx) < threshold) {
+          hasActionableTx = true
+          break
+        }
+      }
+
+      return {
+        network,
+        actionable: hasActionableTx,
+        reason: hasActionableTx ? 'has_actionable_tx' : 'no_actionable_tx',
+      }
+    })
+  )
+
+  // Process results and collect actionable networks
+  const actionableNetworks: string[] = []
+  const errors: Array<{ network: string; error: string }> = []
+
+  for (let i = 0; i < networkResults.length; i++) {
+    const result = networkResults[i]
+    if (!result) continue
+
+    const network = networksWithPendingTxs[i]
+    if (!network) continue
+
+    if (result.status === 'fulfilled') {
+      const value = result.value
+      if (value.actionable) {
+        actionableNetworks.push(value.network)
+      } else if (value.reason === 'not_owner') {
+        // Log networks where user is not owner (for debugging)
+        consola.debug(
+          `Skipping ${network}: signer is not a Safe owner (reason: ${value.reason})`
+        )
+      }
+    } else if (result.status === 'rejected') {
+      // Log errors for debugging
+      const errorMsg =
+        result.reason instanceof Error
+          ? result.reason.message
+          : String(result.reason)
+      errors.push({ network, error: errorMsg })
+      consola.warn(
+        `Failed to check ${network} for actionable transactions: ${errorMsg}`
+      )
+    }
+  }
+
+  // Show detailed summary of results
+  const notOwnerCount = networkResults.filter(
+    (
+      r
+    ): r is PromiseFulfilledResult<{
+      network: string
+      actionable: boolean
+      reason: string
+    }> =>
+      r !== undefined &&
+      r.status === 'fulfilled' &&
+      r.value.reason === 'not_owner'
+  ).length
+  const noActionableTxCount = networkResults.filter(
+    (
+      r
+    ): r is PromiseFulfilledResult<{
+      network: string
+      actionable: boolean
+      reason: string
+    }> =>
+      r !== undefined &&
+      r.status === 'fulfilled' &&
+      r.value.reason === 'no_actionable_tx'
+  ).length
+  const noPendingTxsCount = networkResults.filter(
+    (
+      r
+    ): r is PromiseFulfilledResult<{
+      network: string
+      actionable: boolean
+      reason: string
+    }> =>
+      r !== undefined &&
+      r.status === 'fulfilled' &&
+      r.value.reason === 'no_pending_txs'
+  ).length
+
+  // Always show summary if we checked networks
+  if (networksWithPendingTxs.length > 0) {
+    consola.info('')
+    consola.info('='.repeat(80))
+    consola.info('Network Check Summary:')
+    consola.info('='.repeat(80))
+    consola.info(`Total networks checked: ${networksWithPendingTxs.length}`)
+    consola.info(
+      `Networks with actionable transactions: ${actionableNetworks.length}`
+    )
+
+    if (notOwnerCount > 0) {
+      consola.warn(
+        `  ⚠️  ${notOwnerCount} network(s) where signer is NOT a Safe owner`
+      )
+    }
+    if (noActionableTxCount > 0) {
+      consola.info(
+        `  ℹ️  ${noActionableTxCount} network(s) where all transactions are already signed or not actionable`
+      )
+    }
+    if (noPendingTxsCount > 0) {
+      consola.info(
+        `  ℹ️  ${noPendingTxsCount} network(s) with no pending transactions in MongoDB`
+      )
+    }
+    if (errors.length > 0) {
+      consola.warn(`  ⚠️  ${errors.length} network(s) with errors during check`)
+      // Show first few errors as examples
+      const exampleErrors = errors.slice(0, 5)
+      for (const { network, error } of exampleErrors) {
+        consola.warn(
+          `     - ${network}: ${error.substring(0, 100)}${
+            error.length > 100 ? '...' : ''
+          }`
+        )
+      }
+      if (errors.length > 5) {
+        consola.warn(`     - ... and ${errors.length - 5} more`)
+      }
+    }
+    consola.info('='.repeat(80))
+    consola.info('')
+  }
+
+  // Filter out null values and return actionable networks
+  return actionableNetworks.filter(
+    (network): network is string => network !== null
+  )
+}
+
+/**
+ * Gets contract name from per-network production deployment file by address.
+ * Only reads production deployments (e.g. deployments/{network}.json); used by confirm-safe-tx for production contracts.
+ * @param network - Network name (e.g. hyperevm, ink)
+ * @param address - Contract address
+ * @returns Contract name if found, otherwise "Unknown"
+ */
+function getContractNameFromNetworkDeployments(
+  network: string,
+  address: string
+): string {
+  const projectRoot = process.cwd()
+  const base = path.resolve(projectRoot, 'deployments')
+  const target = path.resolve(base, `${network}.json`)
+  const relative = path.relative(base, target)
+  if (relative.startsWith('..') || path.isAbsolute(relative)) return 'Unknown'
+  try {
+    if (!fs.existsSync(target)) return 'Unknown'
+    const raw = JSON.parse(fs.readFileSync(target, 'utf8'))
+    const data =
+      raw && typeof raw === 'object' && raw.default ? raw.default : raw
+    if (typeof data !== 'object' || data === null) return 'Unknown'
+    const normalizedAddress = address.toLowerCase()
+    for (const [name, addr] of Object.entries(data))
+      if (addr && String(addr).toLowerCase() === normalizedAddress) return name
+    return 'Unknown'
+  } catch {
+    return 'Unknown'
+  }
+}
+
+/**
+ * Gets contract name from local compiled artifacts (out/) by matching the facet's function selectors.
+ * Used when the facet is not yet in deployments/{network}.json (e.g. different branch).
+ * @param selectors - Function selectors from the diamond cut for this facet (hex strings or bytes4)
+ * @returns Contract name only when unambiguous: exactly one artifact has the same selector set as the
+ *   facet, or exactly one artifact is the smallest strict superset of the facet's selectors. Otherwise
+ *   "Unknown" (including multiple exact matches or a tie for smallest superset).
+ */
+function getContractNameFromSelectorsInOut(
+  selectors: (string | Uint8Array)[]
+): string {
+  const projectRoot = process.cwd()
+  const outDir = path.join(projectRoot, 'out')
+  try {
+    if (!fs.existsSync(outDir)) return 'Unknown'
+    const facetSet = new Set(
+      selectors.map((s) => {
+        const hex =
+          typeof s === 'string'
+            ? s.startsWith('0x')
+              ? s
+              : `0x${s}`
+            : `0x${Buffer.from(s).toString('hex')}`
+        return hex.toLowerCase()
+      })
+    )
+    if (facetSet.size === 0) return 'Unknown'
+
+    const exactMatchNames: string[] = []
+    const supersetCandidates: { name: string; size: number }[] = []
+    const entries = fs.readdirSync(outDir, { withFileTypes: true })
+    for (const dirent of entries) {
+      if (!dirent.isDirectory() || !dirent.name.endsWith('.sol')) continue
+      const contractName = dirent.name.slice(0, -4)
+      const jsonPath = path.join(outDir, dirent.name, `${contractName}.json`)
+      if (!fs.existsSync(jsonPath)) continue
+      try {
+        const raw = JSON.parse(fs.readFileSync(jsonPath, 'utf8'))
+        const identifiers = raw?.methodIdentifiers
+        if (!identifiers || typeof identifiers !== 'object') continue
+        const artifactSet = new Set(
+          (Object.values(identifiers) as string[]).map((v) =>
+            (v.startsWith('0x') ? v : `0x${v}`).toLowerCase()
+          )
+        )
+        const isSuperset = [...facetSet].every((sel) => artifactSet.has(sel))
+        if (!isSuperset) continue
+        const exact = facetSet.size === artifactSet.size
+        if (exact) {
+          exactMatchNames.push(contractName)
+          continue
+        }
+        supersetCandidates.push({ name: contractName, size: artifactSet.size })
+      } catch {
+        continue
+      }
+    }
+
+    const [onlyExact] = exactMatchNames
+    if (exactMatchNames.length === 1 && onlyExact !== undefined)
+      return onlyExact
+    if (exactMatchNames.length > 1) return 'Unknown'
+
+    if (supersetCandidates.length === 0) return 'Unknown'
+    const minSupersetSize = Math.min(...supersetCandidates.map((c) => c.size))
+    const smallestSupersets = supersetCandidates.filter(
+      (c) => c.size === minSupersetSize
+    )
+    const [onlySuperset] = smallestSupersets
+    if (smallestSupersets.length === 1 && onlySuperset !== undefined)
+      return onlySuperset.name
+    return 'Unknown'
+  } catch {
+    return 'Unknown'
+  }
+}
+
+/**
+ * Normalizes a diamondCut selector entry (hex string or byte array) to a
+ * lowercase 0x-prefixed string for map lookups.
+ */
+function normalizeDiamondCutSelector(selector: unknown): string {
+  if (typeof selector === 'string')
+    return (
+      selector.startsWith('0x') ? selector : `0x${selector}`
+    ).toLowerCase()
+  return `0x${Buffer.from(selector as Uint8Array).toString(
+    'hex'
+  )}`.toLowerCase()
+}
+
+let cachedDiamondSelectorMap:
+  | Map<string, { name: string; signature: string }>
+  | null
+  | undefined
+
+/**
+ * Creates a mapping of function selectors to function names from diamond ABI
+ * @returns Map of selector to function info
+ */
+async function createSelectorMap(): Promise<Map<
+  string,
+  { name: string; signature: string }
+> | null> {
+  if (cachedDiamondSelectorMap !== undefined) return cachedDiamondSelectorMap
+
+  try {
+    const projectRoot = process.cwd()
+    const diamondPath = path.join(projectRoot, 'diamond.json')
+
+    if (!fs.existsSync(diamondPath)) {
+      cachedDiamondSelectorMap = null
+      return null
+    }
+
+    const abiData = JSON.parse(fs.readFileSync(diamondPath, 'utf8'))
+    if (!Array.isArray(abiData)) {
+      cachedDiamondSelectorMap = null
+      return null
+    }
+
+    const selectorMap = new Map<string, { name: string; signature: string }>()
+
+    for (const abiItem of abiData)
+      if (abiItem.type === 'function')
+        try {
+          const selector = toFunctionSelector(abiItem).toLowerCase()
+          const inputs =
+            abiItem.inputs
+              ?.map((input: { type: string }) => input.type)
+              .join(',') || ''
+          const signature = `${abiItem.name}(${inputs})`
+
+          selectorMap.set(selector, {
+            name: abiItem.name,
+            signature: signature,
+          })
+        } catch (error) {
+          // Skip invalid ABI items
+          continue
+        }
+
+    cachedDiamondSelectorMap = selectorMap
+    return selectorMap
+  } catch (error) {
+    // Transient IO faults (EMFILE, partially-written diamond.json) must not
+    // permanently disable selector decoding — only missing-file/invalid-shape
+    // paths memoize null.
+    consola.warn(`Error creating selector map: ${error}`)
+    return null
+  }
+}
+
+/**
+ * Displays the to-be-added facet version (resolved from the deployment log)
+ * next to the target-state version and highlights a mismatch so the signer
+ * can catch an unintended version before signing. Display-only.
+ */
+function displayFacetVersionInfo(
+  pre: string,
+  contractName: string,
+  network: string,
+  facetAddressCandidates: string[]
+): void {
+  if (!network) {
+    consola.warn(`${pre}Facet Version: could not resolve (unknown network)`)
+    return
+  }
+
+  const knownName =
+    contractName && contractName.toLowerCase() !== 'unknown'
+      ? contractName
+      : null
+  const deployedVersion = getDeployedFacetVersionFromLog(
+    knownName,
+    network,
+    facetAddressCandidates
+  )
+  const targetVersion = knownName
+    ? getTargetStateFacetVersion(network, knownName)
+    : null
+
+  const deployedDisplay = deployedVersion
+    ? `\u001b[34m${deployedVersion}\u001b[0m`
+    : `\u001b[33munknown (address not found in deployment log)\u001b[0m`
+  const targetDisplay = targetVersion
+    ? `\u001b[34m${targetVersion}\u001b[0m`
+    : knownName
+    ? `\u001b[33mnot in target state\u001b[0m`
+    : `\u001b[33munknown (contract name unresolved)\u001b[0m`
+
+  consola.info(`${pre}Facet Version (to be added): ${deployedDisplay}`)
+  consola.info(`${pre}Target State Version:        ${targetDisplay}`)
+
+  if (deployedVersion && targetVersion && deployedVersion !== targetVersion)
+    consola.warn(
+      `${pre}\u001b[31m⚠️  VERSION MISMATCH: to-be-added facet is v${deployedVersion} but target state expects v${targetVersion}\u001b[0m`
+    )
+}
+
+/**
+ * Decodes a diamond cut transaction and displays its details
+ * @param diamondCutData - Decoded diamond cut data
+ * @param chainId - Chain ID
+ * @param network - Optional network name (e.g. hyperevm) to resolve contract names from per-network deployment files
+ * @param indent - Optional prefix for each log line (e.g. when nested under scheduleBatch [00])
+ */
+export async function decodeDiamondCut(
+  diamondCutData: { functionName: string; args?: readonly unknown[] },
+  chainId: number,
+  network?: string,
+  indent?: string
+) {
+  const pre = indent ?? ''
+  // Green / yellow / red by escalating impact, so a Remove stands out in a cut
+  // that mixes actions.
+  const actionMap: Record<number, string> = {
+    0: '\u001b[32mAdd\u001b[0m',
+    1: '\u001b[33mReplace\u001b[0m',
+    2: '\u001b[31mRemove\u001b[0m',
+  }
+
+  // Create selector map for efficient lookup
+  const selectorMap = await createSelectorMap()
+
+  // Best-effort resolution of the network id from chainId so we can build explorer links.
+  let networkIdForExplorer: string | undefined
+  try {
+    const maybeNetworks = data as Record<string, { chainId?: number }>
+
+    for (const [id, cfg] of Object.entries(maybeNetworks))
+      if (cfg?.chainId === chainId) {
+        networkIdForExplorer = id
+        break
+      }
+  } catch {
+    networkIdForExplorer = undefined
+  }
+
+  consola.info(`${pre}Diamond Cut Details:`)
+  consola.info(`${pre}` + '-'.repeat(80))
+  // diamondCutData.args[0] contains an array of modifications.
+  const args = diamondCutData.args
+  if (!args || args.length === 0) {
+    consola.warn(`${pre}No arguments found in diamondCut data`)
+    return
+  }
+
+  const modifications = args[0]
+  if (!Array.isArray(modifications)) {
+    consola.warn(`${pre}Invalid modifications format in diamondCut data`)
+    return
+  }
+
+  // Display order: Add (0), Replace (1), Remove (2)
+  const sortedModifications = [...modifications].sort((a, b) => {
+    const actionA = typeof a[1] === 'bigint' ? Number(a[1]) : (a[1] as number)
+    const actionB = typeof b[1] === 'bigint' ? Number(b[1]) : (b[1] as number)
+    return (actionA <= 2 ? actionA : 99) - (actionB <= 2 ? actionB : 99)
+  })
+
+  // Resolve every selector that neither diamond.json nor the local registry
+  // knows in batched, disk-cached 4byte requests up front — instead of one
+  // sequential HTTP round trip per unknown selector inside the display loop.
+  const unknownSelectors: string[] = []
+  for (const mod of sortedModifications) {
+    const modSelectors = mod[2]
+    if (!Array.isArray(modSelectors)) continue
+    for (const selector of modSelectors) {
+      const normalized = normalizeDiamondCutSelector(selector)
+      if (!selectorMap?.get(normalized) && !getLocalSelectorInfo(normalized))
+        unknownSelectors.push(normalized)
+    }
+  }
+  const fourByteResolved =
+    unknownSelectors.length > 0
+      ? await resolveSelectorsViaFourByte(unknownSelectors)
+      : new Map<string, string>()
+
+  for (const mod of sortedModifications) {
+    // Each mod is [facetAddress, action, selectors]
+    const [facetAddress, actionValue, selectors] = mod
+    const actionNum =
+      typeof actionValue === 'bigint'
+        ? Number(actionValue)
+        : (actionValue as number)
+    try {
+      const networkKey = network ?? networkIdForExplorer ?? ''
+      const facetDisplay = formatAddressForNetworkCliDisplay(
+        networkKey,
+        String(facetAddress)
+      )
+      let facetLine = `Facet Address: \u001b[34m${facetDisplay}\u001b[0m`
+      if (networkIdForExplorer) {
+        const explorerUrl = buildExplorerContractPageUrl(
+          networkIdForExplorer,
+          facetDisplay
+        )
+        if (explorerUrl) facetLine += ` \u001b[36m${explorerUrl}\u001b[0m`
+      }
+      consola.info(`${pre}${facetLine}`)
+      consola.info(`${pre}Action: ${actionMap[actionValue] ?? actionValue}`)
+
+      let contractName = network
+        ? getContractNameFromNetworkDeployments(network, facetAddress)
+        : 'Unknown'
+      // Remove (2): facet address is the zero address (no live contract) and
+      // the selector list may be a partial subset — superset matching is unsafe.
+      if (contractName === 'Unknown' && actionNum !== 2)
+        contractName = getContractNameFromSelectorsInOut(selectors)
+      consola.info(`${pre}Contract Name: \u001b[34m${contractName}\u001b[0m`)
+
+      if (actionNum === 0 || actionNum === 1)
+        displayFacetVersionInfo(pre, contractName, networkKey, [
+          String(facetAddress),
+          facetDisplay,
+        ])
+
+      // Resolve each selector's name from the local diamond ABI first, then
+      // the local selector registry, then the pre-fetched batch of 4byte
+      // results. The facet ABI is never fetched by address: Remove uses the
+      // zero address, and per-selector lookup covers every action without
+      // depending on a live facet contract.
+      for (const selector of selectors) {
+        const normalizedSelector = normalizeDiamondCutSelector(selector)
+        const functionInfo = selectorMap?.get(normalizedSelector)
+        if (functionInfo) {
+          consola.info(
+            `${pre}Function: \u001b[34m${functionInfo.name}\u001b[0m [${selector}] - ${functionInfo.signature}`
+          )
+          continue
+        }
+        const localInfo = getLocalSelectorInfo(normalizedSelector)
+        if (localInfo) {
+          consola.info(
+            `${pre}Function: \u001b[34m${localInfo.name}\u001b[0m [${selector}] - ${localInfo.signature} \u001b[90m(${localInfo.source})\u001b[0m`
+          )
+          continue
+        }
+        const fourByteName = fourByteResolved.get(normalizedSelector)
+        if (fourByteName)
+          consola.info(
+            `${pre}Function: \u001b[34m${fourByteName}\u001b[0m [${selector}] \u001b[90m(4byte.sourcify.dev)\u001b[0m`
+          )
+        else consola.warn(`${pre}Unknown function [${selector}]`)
+      }
+    } catch (error) {
+      consola.error(`${pre}Error processing facet ${facetAddress}:`, error)
+    }
+    consola.info(`${pre}` + '-'.repeat(80))
+  }
+  // Also log the initialization parameters (2nd and 3rd arguments of diamondCut).
+  // When indent is set, caller (safe-decode-utils) will decode and display init calldata; skip raw dump.
+  if (args && args.length >= 3) {
+    consola.info(`${pre}Init Address: ${args[1]}`)
+    const initCalldata = args[2]
+    const hasInitCall =
+      initCalldata &&
+      typeof initCalldata === 'string' &&
+      initCalldata !== '0x' &&
+      (initCalldata as string).length >= 10
+    if (!indent || !hasInitCall)
+      consola.info(`${pre}Init Calldata: ${initCalldata ?? '0x'}`)
+  }
+}
+
+/**
+ * Obtains a safe
+ * @param data - Transaction data
+ * @returns Decoded function name and data if available
+ */
+export const getSafeInfo = async (safeAddress: string, network: string) => {
+  const chain = getViemChainForNetworkName(network)
+
+  // Get Safe information directly from the contract
+  consola.info(`Getting Safe info for ${safeAddress} on ${network}`)
+  let safeInfo
+  try {
+    const rpcUrl = chain.rpcUrls.default.http[0]
+    if (!rpcUrl) throw new Error(`No RPC URL for network ${network}`)
+    const {
+      url: transportUrl,
+      fetchOptions,
+      retryCount,
+      retryDelay,
+    } = getTransportConfigFromRpcUrl(rpcUrl)
+    const publicClient = createPublicClient({
+      chain,
+      transport: http(transportUrl, {
+        ...(fetchOptions ? { fetchOptions } : {}),
+        ...(retryCount !== undefined ? { retryCount } : {}),
+        ...(retryDelay !== undefined ? { retryDelay } : {}),
+      }),
+    })
+
+    safeInfo = await getSafeInfoFromContract(
+      publicClient,
+      normalizeAddressForNetwork(network, safeAddress)
+    )
+  } catch (error: unknown) {
+    const errorMsg = error instanceof Error ? error.message : String(error)
+    consola.error(`Failed to get Safe info: ${errorMsg}`)
+    throw new Error(`Could not get Safe info for ${safeAddress} on ${network}`)
+  }
+
+  return safeInfo
+}
+
+/** How many salts to try before giving up on finding an unused operation id. */
+const MAX_SALT_ATTEMPTS = 16
+
+export interface IPickTimelockSaltInput {
+  client: PublicClient
+  chainId: number
+  timelockAddress: Address
+  targetAddresses: Address[]
+  originalCalldatas: Hex[]
+  /**
+   * The values the caller will schedule. Probing an assumed all-zero array would
+   * ask about a different operation than the one being created, so a taken id
+   * could read as free.
+   */
+  values: bigint[]
+}
+
+/**
+ * Picks the first action-derived salt whose operation the timelock does not
+ * already know.
+ *
+ * OZ's `_schedule` rejects any id it already has a timestamp for, and it keeps
+ * one after execute, so the action's first candidate salt is unusable for an
+ * action that has run before — scheduling it would revert only after signatures
+ * had been collected and the delay had elapsed.
+ *
+ * A pending hit refuses. Advancing past one would schedule the same batch twice
+ * under two operation ids, and the second proposal's intentHash would differ, so
+ * neither the timelock nor the duplicate index would stop a double execution.
+ *
+ * The scan is deterministic given chain state, so two proposers racing on the
+ * same repeat converge on the same salt and stay deduplicated.
+ *
+ * @param input - the action, its chain, and a client to read the timelock with.
+ * @returns the salt to schedule under.
+ * @throws If the timelock cannot be read, or every attempt is already taken.
+ */
+export const pickTimelockSalt = async (
+  input: IPickTimelockSaltInput
+): Promise<Hex> => {
+  const {
+    client,
+    chainId,
+    timelockAddress,
+    targetAddresses,
+    originalCalldatas,
+    values,
+  } = input
+
+  // A mismatched length probes an id `scheduleBatch` can never create, so a taken
+  // id reads as free and the revert lands after signatures and the full delay.
+  if (originalCalldatas.length !== targetAddresses.length)
+    throw new Error(
+      `pickTimelockSalt: originalCalldatas (${originalCalldatas.length}) and targetAddresses (${targetAddresses.length}) must have the same length`
+    )
+  if (values.length !== targetAddresses.length)
+    throw new Error(
+      `pickTimelockSalt: values (${values.length}) and targetAddresses (${targetAddresses.length}) must have the same length`
+    )
+
+  for (let attempt = 0; attempt < MAX_SALT_ATTEMPTS; attempt++) {
+    const salt = deriveTimelockSalt({
+      chainId,
+      timelockAddress,
+      targets: targetAddresses,
+      payloads: originalCalldatas,
+      attempt,
+    })
+
+    const operationId = await client.readContract({
+      address: timelockAddress,
+      abi: TIMELOCK_OPERATION_STATE_ABI,
+      functionName: 'hashOperationBatch',
+      args: [
+        targetAddresses,
+        values,
+        originalCalldatas,
+        TIMELOCK_ZERO_PREDECESSOR,
+        salt,
+      ],
+    })
+
+    const state = classifyTimelockOperation(
+      await client.readContract({
+        address: timelockAddress,
+        abi: TIMELOCK_OPERATION_STATE_ABI,
+        functionName: 'getTimestamp',
+        args: [operationId],
+      })
+    )
+
+    if (state === 'unknown') return salt
+
+    if (state === 'pending')
+      throw new Error(
+        `Timelock operation ${operationId} for this exact batch is already scheduled on ${timelockAddress} ` +
+          `and has not executed. This proposal duplicates work already in flight — execute or cancel the ` +
+          `existing operation instead of scheduling a second one. Nothing was proposed.`
+      )
+
+    consola.info(
+      `Timelock operation ${operationId} for this batch has already executed; deriving the next salt.`
+    )
+  }
+
+  throw new Error(
+    `Could not find an unused timelock operation id for this batch after ${MAX_SALT_ATTEMPTS} attempts ` +
+      `on ${timelockAddress}. That means this exact batch has been scheduled ${MAX_SALT_ATTEMPTS} times ` +
+      `already — refusing to schedule rather than guess.`
+  )
+}
+
+/**
+ * Wraps one or more calls in a single timelock `scheduleBatch` call.
+ * Inner calls are scheduled (and later executed) in array order, so callers
+ * control execution ordering via the order of `targetAddresses`/`originalCalldatas`.
+ * @param network - Network name
+ * @param rpcUrl - RPC URL (falls back to the chain default when empty)
+ * @param timelockAddress - Address of the timelock controller
+ * @param targetAddresses - Target contract address per inner call (parallel to `originalCalldatas`)
+ * @param originalCalldatas - Calldata per inner call (parallel to `targetAddresses`)
+ * @returns The `scheduleBatch` calldata and the timelock as the new target
+ * @throws If the call arrays are empty or differ in length, if the timelock
+ *         cannot be read, or if every candidate salt maps to an operation id the
+ *         timelock already knows (see {@link pickTimelockSalt})
+ */
+export async function wrapWithTimelockSchedule(
+  network: string,
+  rpcUrl: string,
+  timelockAddress: Address,
+  targetAddresses: Address[],
+  originalCalldatas: Hex[]
+): Promise<{ calldata: Hex; targetAddress: Address }> {
+  if (targetAddresses.length === 0)
+    throw new Error('wrapWithTimelockSchedule requires at least one call')
+  if (targetAddresses.length !== originalCalldatas.length)
+    throw new Error(
+      `wrapWithTimelockSchedule: targetAddresses (${targetAddresses.length}) and originalCalldatas (${originalCalldatas.length}) must have the same length`
+    )
+
+  const chain = getViemChainForNetworkName(network)
+  const parsedRpcUrl = rpcUrl || chain.rpcUrls.default.http[0]
+  if (!parsedRpcUrl) throw new Error(`No RPC URL for network ${network}`)
+  const {
+    url: transportUrl,
+    fetchOptions,
+    retryCount,
+    retryDelay,
+  } = getTransportConfigFromRpcUrl(parsedRpcUrl)
+  const client = createPublicClient({
+    chain,
+    transport: http(transportUrl, {
+      ...(fetchOptions ? { fetchOptions } : {}),
+      ...(retryCount !== undefined ? { retryCount } : {}),
+      ...(retryDelay !== undefined ? { retryDelay } : {}),
+    }),
+  })
+
+  // Get the minimum delay from the timelock controller
+  const timelockAbi = parseAbi([
+    'function getMinDelay() view returns (uint256)',
+  ])
+
+  let minDelay: bigint
+  try {
+    minDelay = await client.readContract({
+      address: timelockAddress,
+      abi: timelockAbi,
+      functionName: 'getMinDelay',
+    })
+  } catch (error) {
+    consola.warn(
+      'Failed to get minimum delay from timelock, reading from config file'
+    )
+
+    // Read from config file as fallback
+    try {
+      const configPath = path.join(
+        process.cwd(),
+        'config',
+        'timelockController.json'
+      )
+      const configData = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+      minDelay = BigInt(configData.minDelay || 3600)
+      consola.info(`Using minimum delay from config: ${minDelay} seconds`)
+    } catch (configError) {
+      consola.warn(
+        'Failed to read timelockController.json config file, using default 1 hour'
+      )
+      minDelay = 3600n // Default to 1 hour
+    }
+  }
+
+  const values = targetAddresses.map(() => 0n)
+
+  const salt = await pickTimelockSalt({
+    client,
+    chainId: chain.id,
+    timelockAddress,
+    targetAddresses,
+    originalCalldatas,
+    values,
+  })
+
+  const scheduleBatchCalldata = encodeTimelockScheduleBatch(
+    targetAddresses,
+    originalCalldatas,
+    salt,
+    minDelay,
+    values
+  )
+
+  consola.info(
+    `Wrapped ${targetAddresses.length} call(s) in timelock scheduleBatch with minimum delay of ${minDelay} seconds`
+  )
+
+  return {
+    calldata: scheduleBatchCalldata,
+    targetAddress: timelockAddress,
+  }
+}

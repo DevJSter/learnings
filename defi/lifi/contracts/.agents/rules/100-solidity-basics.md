@@ -1,0 +1,79 @@
+---
+name: Solidity baseline
+description: Baseline rules for all Solidity files (contracts, scripts, tests)
+globs:
+  - '**/*.sol'
+  - '**/*.s.sol'
+paths:
+  - '**/*.sol'
+  - '**/*.s.sol'
+---
+
+## Licensing ([CONV:LICENSE])
+
+- Our own files: `// SPDX-License-Identifier: LGPL-3.0-only` immediately followed by the pragma statement with no blank line in between.
+- No other comments or directives (including NatSpec) may appear between the SPDX line and `pragma`.
+- External copies retain original license + source note.
+- All contracts must use `pragma solidity ^0.8.17;`.
+- Do not mirror legacy `Unlicense` headers from older test utilities when creating new `.sol` files; new Solidity files in this repo must follow the LGPL+pragma convention above.
+
+## Naming Conventions ([CONV:NAMING])
+
+- Functions/vars camelCase; constants & immutables are CONSTANT_CASE.
+- Function params use leading underscore (e.g., `_amount`).
+
+## Address ⇄ bytes32 Conversions ([CONV:ADDR-BYTES32])
+
+- Use the `LibBytes` helpers; never hand-roll the cast:
+  - `LibBytes.toBytes32(addr)` — address → bytes32 (widening, lossless).
+  - `LibBytes.toAddress(b)` — bytes32 → address, **checked** (reverts `NotAnAddress` if the top 96 bits are set). This is the default.
+  - `LibBytes.toAddressUnchecked(b)` — bytes32 → address by truncation; only where dropping the high bits is intentional / already guarded.
+- A raw `bytes32(uint256(uint160(x)))` / `address(uint160(uint256(x)))` in new code is flagged by the Olympix `unsafe-downcast` detector. The helper centralises the (dismissed) finding so call sites stay clean.
+- Numeric narrowing (`uintN(...)`) is out of scope here — tracked separately (EXSC-617).
+
+## NatSpec Requirements ([CONV:NATSPEC])
+
+- Contracts & interfaces must include:
+  - `@title` - must match the contract/interface name (same as filename without `.sol`)
+  - `@author LI.FI (https://li.fi)`
+  - `@notice` - must describe what the contract/interface contains and its purpose
+  - `@custom:version X.Y.Z`
+- NatSpec must appear directly above the `contract`/`interface` keyword — no blank line between the closing `*/` and the declaration.
+- Public/external functions require NatSpec including params/returns.
+- For pure test/script scaffolding keep headers minimal but retain SPDX/pragma.
+
+## Versioning ([CONV:VERSIONING])
+
+Every deployable contract carries `@custom:version X.Y.Z` (semver). Bump rules:
+
+| Change                                                                                                         | Bump          |
+| -------------------------------------------------------------------------------------------------------------- | ------------- |
+| Removed/renamed function, new revert on existing function, storage layout change, constructor signature change | **MAJOR** (X) |
+| New public/external function, new supported asset or network                                                   | **MINOR** (Y) |
+| Internal fix with zero behavioral change at the ABI/storage level                                              | **PATCH** (Z) |
+
+**Cascade**: if a library you depend on bumps MAJOR, evaluate whether consumers are affected and bump them accordingly.
+
+**GenericErrors.sol** is a shared library — never remove or rename existing errors (selectors are part of the ABI). (Version-bump-on-add is covered under Error Handling.)
+
+## Blank Lines ([CONV:BLANKLINES])
+
+- Single blank line between logical sections and between function declarations.
+- Follow in-function blank-line rules (before emits/returns; no stray gaps).
+- Blank line between `vm.expectRevert()` and function call in tests.
+- Blank line before `vm.stopPrank()` if separate logical block.
+- Blank line before assertions.
+- Single blank line between test cases.
+- Single blank line after `vm.startPrank(address)`.
+- For `vm.expectEmit` blocks: no blank line between `vm.expectEmit` and its event definition, but blank lines before and after the entire block.
+- Group related test assertions together without blank lines between them.
+
+## Error Handling
+
+- Use custom errors instead of revert strings; prefer existing errors/helpers before adding new ones.
+- Use generic errors from `src/Errors/GenericErrors.sol`; bump `@custom:version` when adding; facet-specific errors stay local.
+
+## Code Quality
+
+- Adhere to rules in `.solhint.json`.
+- Avoid assembly unless necessary and heavily commented with justification (why assembly is needed here); prefer existing helpers over new implementations.

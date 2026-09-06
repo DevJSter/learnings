@@ -1,0 +1,178 @@
+{
+  "refundWallet": "0x156CeBba59DEB2cB23742F70dCb0a11cC775591F",
+  "feeCollectorOwner": "0xC06ebbefD94032B85424D51906e2A335EFAe264B",
+  "withdrawWallet": "0x08647cc950813966142A416D40C382e2c5DB73bB",
+  "pauserWallet": "0xf9D8BA34a51750cf6abFA9De7aCD37f182081A4A",
+  "deployerWallet": "0xb05E63458A51731Aad26BdcD6E12246330E6095F",
+  "devWallet": "0xcf1A07FEd1b622B1d9B80D86DE06D8c43E4fBDdB",
+  "backendSigner": {
+    "staging": "0x981CCF8c09633F6F2AF3fe661C285ca1DB09caE1",
+    "production": "0xAF4B7A83591a6c4c8B9d1341C3F08BBc3b800fc5"
+  },
+  "walletKeys": {
+    "refundWallet": "PRIVATE_KEY_REFUND_WALLET",
+    "withdrawWallet": "PRIVATE_KEY_WITHDRAW_WALLET",
+    "pauserWallet": "PRIVATE_KEY_PAUSER_WALLET",
+    "deployerWallet": "PRIVATE_KEY_PRODUCTION",
+    "devWallet": "PRIVATE_KEY",
+    "backendSigner": {
+      "staging": "PRIVATE_KEY_BACKEND_SIGNER_STAGING",
+      "production": "PRIVATE_KEY_BACKEND_SIGNER_PRODUCTION"
+    }
+  },
+  "tronWallets": {
+    "refundWallet": "TBvVg3Aam5QP2XE3XCatgatjefXvsYf6yD",
+    "feeCollectorOwner": "TTWhPqF38FneGGN1smz3m5LsNJQYx4mgQy",
+    "withdrawWallet": "TAjanapKoCE1ky3L4Qzndnv3YAUmDwCLdZ",
+    "pauserWallet": "TYkGtJi7iQqMvtyeMhhHUCiGfsRExKnAkd",
+    "deployerWallet": "TS3kzzu8BVn6q5T8pskbhpEftZzk2nUkps",
+    "devWallet": "TUrG4T2iYVzHikATZtoGoy1xPxdyKA8M8J"
+  },
+  "approvedSelectorsForRefundWallet": [
+    {
+      "selector": "0xd9caed12",
+      "name": "WithdrawFacet.withdraw"
+    }
+  ],
+  "safeOwners": [
+    "0xb05E63458A51731Aad26BdcD6E12246330E6095F",
+    "0x518ee3D0F8AC59deDAc278859A7B8bc13dA360Dc",
+    "0x042727b75C80326F3488a6CEd46775EDCe8f1940",
+    "0xFF0cC7DdcE415293c5dE85b8737bC487eff176cF",
+    "0xe5552E1a40cBcB95b4905d92907336C06681280c",
+    "0x9740A8E0197689d144B19DA4bDc9eF65fEf11Cda"
+  ],
+  "coreFacets": [
+    "AccessManagerFacet",
+    "CalldataVerificationFacet",
+    "DiamondCutFacet",
+    "DiamondLoupeFacet",
+    "EmergencyPauseFacet",
+    "GasZipFacet",
+    "GenericSwapFacetV3",
+    "LiFiIntentEscrowFacetV2",
+    "OwnershipFacet",
+    "PeripheryRegistryFacet",
+    "WhitelistManagerFacet",
+    "WithdrawFacet"
+  ],
+  "corePeriphery": [
+    "ERC20Proxy",
+    "Executor",
+    "FeeForwarder",
+    "GasZipPeriphery",
+    "LiFiTimelockController",
+    "OutputValidator",
+    "Permit2Proxy",
+    "TokenWrapper"
+  ],
+  "blacklistedFunctionSelectors": ["0x23b872dd"],
+  "whitelistPeripheryFunctions": {
+    "FeeForwarder": [
+      {
+        "selector": "0x332d746b",
+        "signature": "forwardERC20Fees(address,(address,uint256)[])"
+      },
+      {
+        "selector": "0x0e8ae67f",
+        "signature": "forwardNativeFees((address,uint256)[])"
+      }
+    ],
+    "GasZipPeriphery": [
+      {
+        "selector": "0x8b71ae6c",
+        "signature": "depositToGasZipERC20((address,address,address,address,uint256,bytes,bool),(bytes32,uint256))"
+      },
+      {
+        "selector": "0xc4af5a74",
+        "signature": "depositToGasZipNative((bytes32,uint256),uint256)"
+      }
+    ],
+    "TokenWrapper": [
+      {
+        "selector": "0xd0e30db0",
+        "signature": "deposit()"
+      },
+      {
+        "selector": "0x3ccfd60b",
+        "signature": "withdraw()"
+      }
+    ],
+    "LiFiDEXAggregator": [
+      {
+        "selector": "0x2646478b",
+        "signature": "processRoute(address,uint256,address,uint256,address,bytes)"
+      }
+    ],
+    "Patcher": [
+      {
+        "selector": "0xefae576b",
+        "signature": "executeWithDynamicPatches(address,bytes,address,uint256,bytes,uint256[],bool)"
+      },
+      {
+        "selector": "0x922c8daa",
+        "signature": "depositAndExecuteWithDynamicPatches(address,address,bytes,address,uint256,bytes,uint256[],bool)"
+      },
+      {
+        "selector": "0xb7c52777",
+        "signature": "depositAndExecuteWithMultiplePatches(address,address[],bytes[],address,uint256,bytes,uint256[][],bool)"
+      },
+      {
+        "selector": "0x4d914979",
+        "signature": "executeWithMultiplePatches(address[],bytes[],address,uint256,bytes,uint256[][],bool)"
+      }
+    ],
+    "LidoWrapper": [
+      {
+        "selector": "0x24dd6483",
+        "signature": "wrapStETHToWstETH(uint256)"
+      },
+      {
+        "selector": "0xa816ca92",
+        "signature": "unwrapWstETHToStETH(uint256)"
+      }
+    ],
+    "OutputValidator": [
+      {
+        "selector": "0x27444dab",
+        "signature": "validateERC20Output(address,uint256,address)"
+      },
+      {
+        "selector": "0x5d865df2",
+        "signature": "validateNativeOutput(uint256,address)"
+      }
+    ]
+  },
+  "whitelistPeripheryNetworks": {
+    "LiFiDEXAggregator": [
+      "bob",
+      "lens",
+      "lisk",
+      "opbnb",
+      "vana",
+      "viction",
+      "worldchain"
+    ]
+  },
+  "facetPeripheryCouplings": {
+    "AcrossFacetV4": {
+      "requires": "ReceiverAcrossV4",
+      "devNotes": "Across V4 destination calls are completed by ReceiverAcrossV4 (EXSC-682, Robinhood)."
+    },
+    "AcrossFacetPackedV4": {
+      "requires": "ReceiverAcrossV4"
+    },
+    "AcrossV4SwapFacet": {
+      "requires": "ReceiverAcrossV4"
+    },
+    "ChainflipFacet": {
+      "requires": "ReceiverChainflip"
+    },
+    "LiFiIntentEscrowFacetV2": {
+      "requires": "ReceiverOIF"
+    },
+    "StargateFacetV2": {
+      "requires": "ReceiverStargateV2"
+    }
+  }
+}

@@ -1,0 +1,1 @@
+../../.agents/rules/300-bash.md

@@ -1,0 +1,1161 @@
+{
+  "audits": {
+    "audit20240201": {
+      "auditCompletedOn": "01.02.2024",
+      "auditedBy": "Cantina",
+      "auditorGitHandle": "n/a",
+      "auditReportPath": "./audit/reports/2024.02.01_LiFiDexAggregator(v1.0.0).pdf",
+      "auditCommitHash": "n/a (This is a forked contract that was audited for Sushiswap)"
+    },
+    "audit20240814": {
+      "auditCompletedOn": "14.08.2024",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2024.08.14_StargateFacetV2_ReAudit.pdf",
+      "auditCommitHash": "d622002440317580b5d0fb90ef22b839d84957e2"
+    },
+    "audit20240902": {
+      "auditCompletedOn": "02.09.2024",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2024.09.02_CalldataVerificationFacet.pdf",
+      "auditCommitHash": "374d066a2d4ffd98eb6042cac7a2dd4aa0bf2ff8"
+    },
+    "audit20240913": {
+      "auditCompletedOn": "13.09.2024",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2024.09.13_EmergencyPauseFacet.pdf",
+      "auditCommitHash": "77441a088e0789513db4e068f7ef6c5c0988ee42"
+    },
+    "audit20241007": {
+      "auditCompletedOn": "07.10.2024",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2024.10.07_AcrossV3.pdf",
+      "auditCommitHash": "ef2d7bc478ce1e7f5ad6f1060f657864124fa85e"
+    },
+    "audit20241014": {
+      "auditCompletedOn": "14.10.2024",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2024.10.14_WithdrawablePeriphery.pdf",
+      "auditCommitHash": "b03e658b359f1696388e2aaeaf24a7c107ba462a"
+    },
+    "audit20241105": {
+      "auditCompletedOn": "05.11.2024",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2024.11.05_EmergencyPauseFacet_ReAudit.pdf",
+      "auditCommitHash": "da61880ba3847c07c35b64a78b957ff845ec18ac"
+    },
+    "audit20241107": {
+      "auditCompletedOn": "07.11.2024",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2024.11.07_GasZip.pdf",
+      "auditCommitHash": "2d8927ababff6ace0c577d92407bcf289ebb89c0"
+    },
+    "audit20241122": {
+      "auditCompletedOn": "22.11.2024",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2024.11.22_Permit2Proxy.pdf",
+      "auditCommitHash": "0e3debb78abcdf9a9f934115338b611e16b039a0"
+    },
+    "audit20241202": {
+      "auditCompletedOn": "02.12.2024",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2024.12.02_RelayFacet(v1.0.0).pdf",
+      "auditCommitHash": "291d0a78bc4174b3ec29bb2ce0b27c6b5d3e8ec8"
+    },
+    "audit20241203": {
+      "auditCompletedOn": "03.12.2024",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2024.12.03_LiFiDexAggregator.pdf",
+      "auditCommitHash": "8a34562c912b5b19c919bb95338655c944428af5"
+    },
+    "audit20241205": {
+      "auditCompletedOn": "05.12.2024",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2024.12.05_DeBridgeDlnFacet(v1.0.0).pdf",
+      "auditCommitHash": "d72cb05510acc5bb794bde05af550ba2ef85d06d"
+    },
+    "audit20241206": {
+      "auditCompletedOn": "06.12.2024",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2024.12.06_AcrossFacetPackedV3(v1.2.0).pdf",
+      "auditCommitHash": "5f59b4957fe315ea2d7b5e9daa931785ccff488c"
+    },
+    "audit20250106": {
+      "auditCompletedOn": "06.01.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.01.06_AcrossFacetV3(v1.1.0).pdf",
+      "auditCommitHash": "fb4c7a4e02c5fd214d78b8cdc5d4a03fa0b06ab9"
+    },
+    "audit20250109_1": {
+      "auditCompletedOn": "09.01.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.01.09_ThorSwapFacet(v1.2.1).pdf",
+      "auditCommitHash": "5005bf62858a9cb2a7628976ef870e91bb732a75"
+    },
+    "audit20250109_2": {
+      "auditCompletedOn": "09.01.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.01.09_WithdrawablePeripheryUpdates.pdf",
+      "auditCommitHash": "ec76b33cedd69338e569c7994b99b03cb7e6d502"
+    },
+    "audit20250109_3": {
+      "auditCompletedOn": "09.01.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.01.09_SafeTransferETHUpdate.pdf",
+      "auditCommitHash": "e4f27b0c4f572e5c64ca132dc2e496a3fe6c7c1d"
+    },
+    "audit20250110_1": {
+      "auditCompletedOn": "10.01.2025",
+      "auditedBy": "Cantina (security firm)",
+      "auditorGitHandle": "cantinaxyz",
+      "auditReportPath": "./audit/reports/2025.01.10_Cantina_PreComp.pdf",
+      "auditCommitHash": "c9e6246167f4ff44f4535e466a4ceb902552aa13"
+    },
+    "audit20250110_2": {
+      "auditCompletedOn": "10.01.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.01.10_Timelock(v1.0.0).pdf",
+      "auditCommitHash": "af28afab139a158650f4ef4f4442f2b5fcdfe497"
+    },
+    "audit20250117_1": {
+      "auditCompletedOn": "17.01.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.01.17_LiFiDexAggregator(v1.1.0).pdf",
+      "auditCommitHash": "n/a (one deployed contract instance was audited)"
+    },
+    "audit20250117_2": {
+      "auditCompletedOn": "17.01.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.01.17_LiFiDexAggregator(v1.2.0).pdf",
+      "auditCommitHash": "n/a (one deployed contract instance was audited)"
+    },
+    "audit20250117_3": {
+      "auditCompletedOn": "17.01.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.01.17_LiFiDexAggregator(v1.3.0).pdf",
+      "auditCommitHash": "n/a (one deployed contract instance was audited)"
+    },
+    "audit20250117_4": {
+      "auditCompletedOn": "17.01.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.01.17_LiFiDexAggregator(v1.4.0).pdf",
+      "auditCommitHash": "n/a (one deployed contract instance was audited)"
+    },
+    "audit20250219": {
+      "auditCompletedOn": "19.02.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.02.19_GlacisFacet(v1.0.0).pdf",
+      "auditCommitHash": "9e623bc2a218399172e734af0ba6dfa3f76963a5"
+    },
+    "audit20250220": {
+      "auditCompletedOn": "20.02.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.02.20_CalldataVerificationFacet(v1.3.0).pdf",
+      "auditCommitHash": "48427d21160585f276d206f0e103ce6bd42c4c03"
+    },
+    "audit20250228": {
+      "auditCompletedOn": "28.02.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.02.28_MayanFacet(v1.1.0).pdf",
+      "auditCommitHash": "be250763f57596d53d19a1af0988ed3ea351148e"
+    },
+    "audit20250305": {
+      "auditCompletedOn": "05.03.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.03.05_ChainflipFacet(v1.0.0).pdf",
+      "auditCommitHash": "233571f68ef94ba5f8c5d19158401d84cd842d43"
+    },
+    "audit20250327": {
+      "auditCompletedOn": "27.03.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.03.27_MayanFacet(v1.2.0).pdf",
+      "auditCommitHash": "acc5becc02b9060a60b1135c9b25f3ccea8cbd31"
+    },
+    "audit20250411": {
+      "auditCompletedOn": "11.04.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.04.11_LiFiDEXAggregator(v1.7.0).pdf",
+      "auditCommitHash": "f49cfdf2bfc6c0c2f5c83c65f9b5488dac975040"
+    },
+    "audit20250413": {
+      "auditCompletedOn": "13.04.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.04.13_DexManagerFacet(v1.0.2).pdf",
+      "auditCommitHash": "299df50b5d44d4d59a7ccc34bbfe94584acb0c81"
+    },
+    "audit20250415": {
+      "auditCompletedOn": "15.04.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.04.15_Permit2Proxy(v1.0.3).pdf",
+      "auditCommitHash": "5b212bd302a7ec0c027c51753d6d5a9937f6769e"
+    },
+    "audit20250416": {
+      "auditCompletedOn": "16.04.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.04.16_GasZipFacet(v2.0.3).pdf",
+      "auditCommitHash": "74ad75cc34096244fa2da1e8d7647223c9fe5da5"
+    },
+    "audit20250422": {
+      "auditCompletedOn": "22.04.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.04.22_LiFiDexAggregator(v1.8.0).pdf",
+      "auditCommitHash": "eef8eac61b8cfcc6a623a5a83c9c3910e25adb91"
+    },
+    "audit20250506": {
+      "auditCompletedOn": "06.05.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.05.06_LibAsset(v2.0.0).pdf",
+      "auditCommitHash": "648d4724eb7be6e206e1cd083677f575705dacc3"
+    },
+    "audit20250508": {
+      "auditCompletedOn": "08.05.2025",
+      "auditedBy": "Cantina",
+      "auditorGitHandle": "cantinaxyz",
+      "auditReportPath": "./audit/reports/2025.05.08_Cantina_Comp.pdf",
+      "auditCommitHash": "eb12d93c17cf93b27cba7b3a49ebdc9536d7d894"
+    },
+    "audit20250510": {
+      "auditCompletedOn": "10.05.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.05.10_LiFiDexAggregator(v1.9.0).pdf",
+      "auditCommitHash": "eb255e62405c477f24c1bd78076c7d3677284681"
+    },
+    "audit20250515": {
+      "auditCompletedOn": "15.05.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.05.15_GasZipFacet(v2.0.4).pdf",
+      "auditCommitHash": "bc3dcebfe2e6e32fab7ec9cd37db423b23139abf"
+    },
+    "audit20250603": {
+      "auditCompletedOn": "03.06.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.06.03_GnosisBridgeFacet(v2.0.0).pdf",
+      "auditCommitHash": "7197c0a237f46c83d39f5566f18bbadb5ca156ed"
+    },
+    "audit20250608": {
+      "auditCompletedOn": "08.06.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.06.08_LiFiDexAggregator(v1.10.0).pdf",
+      "auditCommitHash": "2de27694cfdd15e73eaf1a395c683da8cbac8d6f"
+    },
+    "audit20250610": {
+      "auditCompletedOn": "10.06.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.06.10_LidoWrapper(v1.0.0).pdf",
+      "auditCommitHash": "feab0709941d12efaed8be16fea96f4ff4276544"
+    },
+    "audit20250620": {
+      "auditCompletedOn": "20.06.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.06.20_LibAsset(v2.1.0).pdf",
+      "auditCommitHash": "8a3e150513c066311252acc95b72a46ee51776a1"
+    },
+    "audit20250626": {
+      "auditCompletedOn": "26.06.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.06.26_PioneerFacet(v1.0.0).pdf",
+      "auditCommitHash": "af8cfaf1bbd80a1c98449f8115fa8f34c9b78ee9"
+    },
+    "audit20250629": {
+      "auditCompletedOn": "29.06.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.06.29_CalldataVerificationFacet(v1.3.1).pdf",
+      "auditCommitHash": "8840d8b41a894c46a444c5b2db2ca34babee753f"
+    },
+    "audit20250629_1": {
+      "auditCompletedOn": "29.06.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.06.29_SwapperV2(v1.1.0).pdf",
+      "auditCommitHash": "4af7030dd8676d892c0bd63cdb2f43cbb7aae4cd"
+    },
+    "audit20250630": {
+      "auditCompletedOn": "30.06.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.06.30_LiFiDexAggregator(v1.11.0).pdf",
+      "auditCommitHash": "6561ef4cc67f167d6485c412afb738f5b5b0da7f"
+    },
+    "audit20250706": {
+      "auditCompletedOn": "06.07.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.07.06_LiFiTimelockController(v1.0.1).pdf",
+      "auditCommitHash": "f4bbda99541c441f90a76515a0624713831c8abb"
+    },
+    "audit20250706_01": {
+      "auditCompletedOn": "06.07.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.07.06_Permit2Proxy(v1.0.4).pdf",
+      "auditCommitHash": "a00deeb45dafe3e5124770c41a7a28ba931361d2"
+    },
+    "audit20250718": {
+      "auditCompletedOn": "18.07.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.07.18_AllBridgeFacet(v2.1.0).pdf",
+      "auditCommitHash": "30b38a1aaf18852d681a615c95165ec96f92e886"
+    },
+    "audit20250728": {
+      "auditCompletedOn": "28.07.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.07.28_LiFiDexAggregator(v1.12.0).pdf",
+      "auditCommitHash": "da57cb55dbbb6103a00ba662c76dd8a03abdc8d1"
+    },
+    "audit20250730": {
+      "auditCompletedOn": "30.07.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.07.30_Patcher(v1.0.0).pdf",
+      "auditCommitHash": "1536e96068d5cb1672e48078d22da27c79f4c2ef"
+    },
+    "audit20250822": {
+      "auditCompletedOn": "22.08.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.08.22_GlacisFacet(v1.1.0).pdf",
+      "auditCommitHash": "15f4a1c3fe53e344245f3c1834df81643dde7830"
+    },
+    "audit20250825": {
+      "auditCompletedOn": "25.08.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.08.25_MayanFacet(v1.2.2).pdf",
+      "auditCommitHash": "b7e4b66ae83961f2873454f0bf09347e9ac8959d"
+    },
+    "audit20250825_1": {
+      "auditCompletedOn": "25.08.2025",
+      "auditedBy": "Burra Security",
+      "auditorGitHandle": "burrasec",
+      "auditReportPath": "./audit/reports/2025.08.25_RelayDepositoryFacet(v1.0.0).pdf",
+      "auditCommitHash": "4837b45b3ae705dee625015b1a084b3c69dee2a2"
+    },
+    "audit20250901": {
+      "auditCompletedOn": "01.09.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.09.01_AcrossV4(v1.0.0).pdf",
+      "auditCommitHash": "650d18eb98aff7fe45249147d6db7e352825c1e4"
+    },
+    "audit20250919": {
+      "auditCompletedOn": "19.09.2025",
+      "auditedBy": "Burra Security",
+      "auditorGitHandle": "burrasec",
+      "auditReportPath": "./audit/reports/2025.09.19_GardenFacet(v1.0.0).pdf",
+      "auditCommitHash": "79ffda31ccf4c48af914ccb209781bc521abeacd"
+    },
+    "audit20250921": {
+      "auditCompletedOn": "21.09.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.09.21_AllBridgeFacet(v2.1.1).pdf",
+      "auditCommitHash": "1d1bee22c3a632f67b775f4cfc033589c4ad3c24"
+    },
+    "audit20251001": {
+      "auditCompletedOn": "01.10.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.10.01_EcoFacet(v1.0.0).pdf",
+      "auditCommitHash": "8d0e66a69c765e83c13339d7a77071ce2f26968a"
+    },
+    "audit20251007": {
+      "auditCompletedOn": "07.10.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.10.07_UnitFacet(v1.0.0).pdf",
+      "auditCommitHash": "626dd4a927ed84c1c8de9e6b22af66669da62356"
+    },
+    "audit20251015": {
+      "auditCompletedOn": "15.10.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.10.15_FeeForwarder(v1.0.0).pdf",
+      "auditCommitHash": "5022c0aca332e2a066f1398e3456632679a836f9"
+    },
+    "audit20251020": {
+      "auditCompletedOn": "20.10.2025",
+      "auditedBy": "Burra Security",
+      "auditorGitHandle": "burrasec",
+      "auditReportPath": "./audit/reports/2025.10.20_EcoFacet(v1.1.0).pdf",
+      "auditCommitHash": "25a5b880bca3ea51f060787e30ccc2bdcd13d6f9"
+    },
+    "audit20251104": {
+      "auditCompletedOn": "04.11.2025",
+      "auditedBy": "Burra Security",
+      "auditorGitHandle": "burrasec",
+      "auditReportPath": "./audit/reports/2025.11.04_WhitelistManagerFacet(v1.0.0).pdf",
+      "auditCommitHash": "5665c5f9b4e7e9419201801ae58f9dd1d05c5f8f"
+    },
+    "audit20251104_1": {
+      "auditCompletedOn": "04.11.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.11.04_WhitelistManagerFacet(v1.0.0)_1.pdf",
+      "auditCommitHash": "e87f69019e59b8060f9c53e00acd4ed07ac4084a"
+    },
+    "audit20251113": {
+      "auditCompletedOn": "13.11.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.11.13_GlacisFacet(v1.2.0).pdf",
+      "auditCommitHash": "13c4296cb4783a2c1108a62afe181f3dbf81cbc0"
+    },
+    "audit20251119": {
+      "auditCompletedOn": "19.11.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.11.19_LiFiIntentEscrowFacet(v1.0.0).pdf",
+      "auditCommitHash": "4e71699761d075f43f5d9cd66c4e1be082fa08ee"
+    },
+    "audit20251201": {
+      "auditCompletedOn": "01.12.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.12.01_PolymerCCTPFacet(v1.0.0).pdf",
+      "auditCommitHash": "605f7e14af2dd96fe8f50de253c51c7979245584"
+    },
+    "audit20251203_1": {
+      "auditCompletedOn": "03.12.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.12.03_MegaETHBridgeFacet(v1.0.0).pdf",
+      "auditCommitHash": "721afd2499ce72c2f6abc4a30ba56367d88cac85"
+    },
+    "audit20251203_2": {
+      "auditCompletedOn": "03.12.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.12.03_UnitFacet(v1.0.1).pdf",
+      "auditCommitHash": "bec40d62866c35f635364b69daf4f93b4f54e4e0"
+    },
+    "audit20251208": {
+      "auditCompletedOn": "08.12.2025",
+      "auditedBy": "Burra Security",
+      "auditorGitHandle": "burrasec",
+      "auditReportPath": "./audit/reports/2025.12.08_Patcher(v1.0.1).pdf",
+      "auditCommitHash": "195ec984f74a59f9d6c156387f652d438c39ab74"
+    },
+    "audit20251215": {
+      "auditCompletedOn": "15.12.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.12.15_ReceiverOIF(v1.0.0).pdf",
+      "auditCommitHash": "2f49105451af8067fbf20b875d24e8be1487175d"
+    },
+    "audit20251215_1": {
+      "auditCompletedOn": "15.12.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.12.15_CelerCircleBridgeFacet(v2.0.0).pdf",
+      "auditCommitHash": "e37798634a8e4ac460aaa6f6f158d7aa6fdf5b24"
+    },
+    "audit20251216": {
+      "auditCompletedOn": "16.12.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.12.16_NEARIntentsFacet(v1.0.0).pdf",
+      "auditCommitHash": "4696d22e0522180707e9a63d8b53a60d7ac693ad"
+    },
+    "audit20251215_2": {
+      "auditCompletedOn": "15.12.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.12.15_GasZipPeriphery(v1.0.2).pdf",
+      "auditCommitHash": "cc25140f5874701315b410a1c9e951694dd94e33"
+    },
+    "audit20251219": {
+      "auditCompletedOn": "19.12.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.12.19_AllBridgeFacet(v2.1.2).pdf",
+      "auditCommitHash": "8bbf470b470523eb582843deca6dbba755497e84"
+    },
+    "audit20251225": {
+      "auditCompletedOn": "25.12.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.12.25_TokenWrapper(v1.2.0).pdf",
+      "auditCommitHash": "6c4630071e34556831ace41849090249f1ddf747"
+    },
+    "audit20251229": {
+      "auditCompletedOn": "29.12.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.12.29_WhitelistManagerFacet(v1.1.0).pdf",
+      "auditCommitHash": "5c771a59252be5e7ab7ccfdad8439a7e157f51ff"
+    },
+    "audit20251231": {
+      "auditCompletedOn": "31.12.2025",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2025.12.31_TokenWrapper(v1.2.1).pdf",
+      "auditCommitHash": "a0f5a83d5f42b304474fa040526ce98ea3cea5e6"
+    },
+    "audit20260130": {
+      "auditCompletedOn": "30.01.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.01.30_LiFiIntentEscrowFacet(v1.1.0).pdf",
+      "auditCommitHash": "151a2a3308ae544a493a5a778502b6a7b7bbf2aa"
+    },
+    "audit20260205": {
+      "auditCompletedOn": "05.02.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.02.05_LiFiIntentEscrowFacet(v1.0.1,v1.1.1).pdf",
+      "auditCommitHash": "260f8e8088c88049d4d5de532613b78af188f9a3"
+    },
+    "audit20260216": {
+      "auditCompletedOn": "16.02.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.02.16_PolymerCCTPFacet(v2.0.0).pdf",
+      "auditCommitHash": "7f8a0efe29162fede3f8c647f35044a66459aadb"
+    },
+    "audit20260320": {
+      "auditCompletedOn": "20.03.2026",
+      "auditedBy": "Burra Security",
+      "auditorGitHandle": "burrasec",
+      "auditReportPath": "./audit/reports/2026.03.20_MayanFacet(v1.2.4).pdf",
+      "auditCommitHash": "22d2fd1aaf9fb5f2ff85c98b6521b5e41b4aa6cd"
+    },
+    "audit20260409": {
+      "auditCompletedOn": "09.04.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.04.09_AcrossV4SwapFacet(v1.0.0).pdf",
+      "auditCommitHash": "514f03cb5942c16c4de013ef264b5d55d87e7b9c"
+    },
+    "audit20260423": {
+      "auditCompletedOn": "23.04.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.04.23_PolymerCCTPFacet(v2.0.1).pdf",
+      "auditCommitHash": "f2be9c06a9080629c0dfdfc13759c9f66cac162c"
+    },
+    "audit20260430": {
+      "auditCompletedOn": "30.04.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.04.30_DeBridgeDlnFacet(v1.1.0).pdf",
+      "auditCommitHash": "3b8511fce5f2e9b12a50d77f147536c641303cae"
+    },
+    "audit20260519": {
+      "auditCompletedOn": "19.05.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.05.19_GenericSwapFacetV3(v2.0.0).pdf",
+      "auditCommitHash": "85d2e87d0e46c785ffb63d52fa4b0cc6bf995a85"
+    },
+    "audit20260528": {
+      "auditCompletedOn": "28.05.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.05.28_PolymerCCTPFacet(v2.1.0).pdf",
+      "auditCommitHash": "efdbd68c8905df2e3a075e8dbd616257e22c4bf5"
+    },
+    "audit20260603": {
+      "auditCompletedOn": "03.06.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.06.03_OutputValidator(v1.0.0).pdf",
+      "auditCommitHash": "c1caf50af84b3fecc854dbd0960dd2d8940c498c"
+    },
+    "audit20260608": {
+      "auditCompletedOn": "08.06.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.06.08_LiFiIntentEscrowFacet(v1.1.2).pdf",
+      "auditCommitHash": "828dc476547730a11f06fec77ef84478c8c9af07"
+    },
+    "audit20260610": {
+      "auditCompletedOn": "10.06.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.06.10_MayanFacet(v1.3.0).pdf",
+      "auditCommitHash": "e2e95496953d0435f5a66189f8083bc6523bad1f"
+    },
+    "audit20260617": {
+      "auditCompletedOn": "17.06.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.06.17_ERC20Proxy(v1.2.0).pdf",
+      "auditCommitHash": "a2bb57edd89f3c89f593994e3242cff3d1d93a93"
+    },
+    "audit20260630": {
+      "auditCompletedOn": "30.06.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.06.30_LiFiIntentEscrowFacetV2(v1.0.0).pdf",
+      "auditCommitHash": "11aad2677a9434cd394eb9ab98e3fb23d078e50f"
+    },
+    "audit20260701": {
+      "auditCompletedOn": "01.07.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.07.01_SupersetFacet(v1.0.0).pdf",
+      "auditCommitHash": "6baa3f128eae77d4aa1db1985651607b4a1ac72e"
+    },
+    "audit20260708": {
+      "auditCompletedOn": "08.07.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.07.08_PaxosTransitFacet(v1.0.0).pdf",
+      "auditCommitHash": "149e073de80f2b6a9728faffd94923221de2bf8a"
+    },
+    "audit20260715_1": {
+      "auditCompletedOn": "15.07.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.07.15_LayerSwapFacet(v1.0.0).pdf",
+      "auditCommitHash": "0087bc33a548a4e459cc2dd7f58dd9f0732009bf"
+    },
+    "audit20260715_2": {
+      "auditCompletedOn": "15.07.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.07.15_CalldataVerificationFacet(v2.0.0).pdf",
+      "auditCommitHash": "20098f1b15536fa9ea1a851d19aa9ae9e7d82df1"
+    },
+    "audit20260716": {
+      "auditCompletedOn": "16.07.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.07.16_PolymerCCTPFacet(v3.0.0).pdf",
+      "auditCommitHash": "45e319a2657264df6051acd095ee1d83a5487504"
+    },
+    "audit20260720": {
+      "auditCompletedOn": "20.07.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.07.20_LibBytes(v1.1.0).pdf",
+      "auditCommitHash": "0fbe4b5f92a5cee5b3825ed565ac57985ace284f"
+    },
+    "audit20260721": {
+      "auditCompletedOn": "21.07.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.07.21_SymbiosisFacet(v2.0.0).pdf",
+      "auditCommitHash": "74ade3e7fa5b66977ace20293832c948745dad9c"
+    },
+    "audit20260722": {
+      "auditCompletedOn": "22.07.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.07.22_MayanFacet(v2.0.0).pdf",
+      "auditCommitHash": "37c13a2afb9986422a7b2f88c16702f7975c5a05"
+    },
+    "audit20260727": {
+      "auditCompletedOn": "27.07.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.07.27_AllBridgeFacet(v2.2.0).pdf",
+      "auditCommitHash": "3961b3cddd256f8d10756575b99efe0f323b5204"
+    },
+    "audit20260729": {
+      "auditCompletedOn": "29.07.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.07.29_SupersetFacet(v1.1.0).pdf",
+      "auditCommitHash": "75d072b66bdc613eb2218a88186b05b766c9010e"
+    },
+    "audit20260731": {
+      "auditCompletedOn": "31.07.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.07.31_PolymerCCTPFacet(v3.1.0).pdf",
+      "auditCommitHash": "5a43f43be60dd3b5aba6dbb9d2f890e83689b4bf"
+    },
+    "audit20260818": {
+      "auditCompletedOn": "18.08.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.08.18_FeeForwarder(v2.0.0).pdf",
+      "auditCommitHash": "22b3586ebf6b6fc85a1203c0a04c91d7f0342bf1"
+    },
+    "audit20260820": {
+      "auditCompletedOn": "20.08.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.08.20_FraxFacet(v1.0.0).pdf",
+      "auditCommitHash": "3ae7e5f8180d97db785b0cc93947d3740f209bf5"
+    },
+    "audit20260902": {
+      "auditCompletedOn": "02.09.2026",
+      "auditedBy": "Sujith Somraaj (individual security researcher)",
+      "auditorGitHandle": "sujithsomraaj",
+      "auditReportPath": "./audit/reports/2026.09.02_EcoFacet(v2.0.0).pdf",
+      "auditCommitHash": "c86df08214e4de854a3c20ad3e7aeffc607441d9"
+    }
+  },
+  "auditedContracts": {
+    "AccessManagerFacet": {
+      "1.0.0": ["audit20250508"]
+    },
+    "AcrossFacet": {
+      "2.0.0": ["audit20250508"]
+    },
+    "AcrossFacetPacked": {
+      "1.0.0": ["audit20250508"]
+    },
+    "AcrossFacetPackedV3": {
+      "1.0.0": ["audit20241007"],
+      "1.2.0": ["audit20241206", "audit20250508"]
+    },
+    "AcrossFacetPackedV4": {
+      "1.0.0": ["audit20250901"]
+    },
+    "AcrossFacetV3": {
+      "1.0.0": ["audit20241007"],
+      "1.1.0": ["audit20250106", "audit20250508"]
+    },
+    "AcrossFacetV4": {
+      "1.0.0": ["audit20250901"]
+    },
+    "AcrossV4SwapFacet": {
+      "1.0.0": ["audit20260409"]
+    },
+    "AllBridgeFacet": {
+      "2.0.0": ["audit20250508"],
+      "2.1.0": ["audit20250718"],
+      "2.1.1": ["audit20250921"],
+      "2.1.2": ["audit20251219"],
+      "2.2.0": ["audit20260727"]
+    },
+    "AmarokFacet": {
+      "3.0.0": ["audit20250508"]
+    },
+    "AmarokFacetPacked": {
+      "1.0.0": ["audit20250508"]
+    },
+    "ArbitrumBridgeFacet": {
+      "1.0.0": ["audit20250508"]
+    },
+    "CalldataVerificationFacet": {
+      "1.2.0": ["audit20240902", "audit20250508"],
+      "1.3.0": ["audit20250220"],
+      "1.3.1": ["audit20250629"],
+      "2.0.0": ["audit20260715_2"]
+    },
+    "CBridgeFacet": {
+      "1.0.0": ["audit20250508"]
+    },
+    "CBridgeFacetPacked": {
+      "1.0.3": ["audit20250508"]
+    },
+    "CelerCircleBridgeFacet": {
+      "1.0.1": ["audit20250508"],
+      "2.0.0": ["audit20251215_1"]
+    },
+    "CelerIMFacetBase": {
+      "1.0.0": ["audit20250508"],
+      "2.0.0": ["audit20250508"]
+    },
+    "CelerIMFacetMutable": {
+      "2.0.0": ["audit20250508"]
+    },
+    "ChainflipFacet": {
+      "1.0.0": ["audit20250305", "audit20250508"],
+      "1.0.1": ["audit20250718"]
+    },
+    "DeBridgeDlnFacet": {
+      "1.0.0": ["audit20241205", "audit20250508"],
+      "1.0.1": ["audit20250718"],
+      "1.1.0": ["audit20260430"]
+    },
+    "DexManagerFacet": {
+      "1.0.2": ["audit20250413", "audit20250508"]
+    },
+    "EcoFacet": {
+      "1.0.0": ["audit20251001"],
+      "1.1.0": ["audit20251020"],
+      "2.0.0": ["audit20260902"]
+    },
+    "DiamondCutFacet": {
+      "1.0.0": ["audit20250508"]
+    },
+    "DiamondLoupeFacet": {
+      "1.0.0": ["audit20250508"]
+    },
+    "EmergencyPauseFacet": {
+      "1.0.0": ["audit20240913"],
+      "1.0.1": ["audit20241105", "audit20250508"]
+    },
+    "ERC20Proxy": {
+      "1.1.0": ["audit20250109_2", "audit20250508"],
+      "1.2.0": ["audit20260617"]
+    },
+    "ExcessivelySafeCall": {
+      "1.0.0": ["audit20250508"]
+    },
+    "FeeCollector": {
+      "1.0.1": ["audit20250109_3", "audit20250508"]
+    },
+    "FeeForwarder": {
+      "1.0.0": ["audit20251015"],
+      "2.0.0": ["audit20260818"]
+    },
+    "FraxFacet": {
+      "1.0.0": ["audit20260820"]
+    },
+    "GasZipFacet": {
+      "2.0.0": ["audit20241107"],
+      "2.0.2": ["audit20250110_1"],
+      "2.0.3": ["audit20250416", "audit20250508"],
+      "2.0.4": ["audit20250515"],
+      "2.0.5": ["audit20250718"]
+    },
+    "GasZipPeriphery": {
+      "1.0.0": ["audit20241107"],
+      "1.0.1": ["audit20250110_1", "audit20250508"],
+      "1.0.2": ["audit20251215_2"]
+    },
+    "GenericErrors": {
+      "1.0.1": ["audit20250506", "audit20250508"],
+      "1.0.2": ["audit20250718"],
+      "1.0.4": ["audit20260701"]
+    },
+    "GenericSwapFacet": {
+      "1.0.0": ["audit20250508"]
+    },
+    "GenericSwapFacetV3": {
+      "1.0.1": ["audit20250508"],
+      "1.0.2": ["audit20250610"],
+      "2.0.0": ["audit20260519"]
+    },
+    "GardenFacet": {
+      "1.0.0": ["audit20250919"]
+    },
+    "GlacisFacet": {
+      "1.0.0": ["audit20250219"],
+      "1.1.0": ["audit20250822"],
+      "1.2.0": ["audit20251113"]
+    },
+    "GnosisBridgeFacet": {
+      "1.0.0": ["audit20250508"],
+      "2.0.0": ["audit20250603"]
+    },
+    "HopFacet": {
+      "2.0.0": ["audit20250508"],
+      "2.0.1": ["audit20250506"]
+    },
+    "HopFacetOptimized": {
+      "2.0.0": ["audit20250508"]
+    },
+    "HopFacetPacked": {
+      "1.0.6": ["audit20250508"]
+    },
+    "IEcoPortal": {
+      "1.0.0": ["audit20251001"],
+      "1.1.0": ["audit20251020"]
+    },
+    "IFraxHopV2": {
+      "1.0.0": ["audit20260820"]
+    },
+    "IGarden": {
+      "1.0.0": ["audit20250919"]
+    },
+    "IGlacisAirlift": {
+      "1.1.0": ["audit20251113"]
+    },
+    "ILayerSwapDepository": {
+      "1.0.0": ["audit20260715_1"]
+    },
+    "IOpenIntentFramework": {
+      "1.0.0": ["audit20251119"]
+    },
+    "IOriginSettler": {
+      "1.0.0": ["audit20251119"]
+    },
+    "IPaxosTransit": {
+      "1.0.0": ["audit20260708"]
+    },
+    "ISupersetHubPoolManager": {
+      "1.1.0": ["audit20260729"]
+    },
+    "ISupersetSpokePoolManager": {
+      "1.1.0": ["audit20260729"]
+    },
+    "LayerSwapFacet": {
+      "1.0.0": ["audit20260715_1"]
+    },
+    "LibAccess": {
+      "1.0.0": ["audit20250508"]
+    },
+    "LibAllowList": {
+      "1.0.0": ["audit20250508"],
+      "2.0.0": ["audit20251104", "audit20251104_1"]
+    },
+    "LibAsset": {
+      "1.0.1": ["audit20241202"],
+      "1.0.2": ["audit20250110_1", "audit20250508"],
+      "2.0.0": ["audit20250506"],
+      "2.1.0": ["audit20250620"],
+      "2.1.1": ["audit20250718"],
+      "2.1.2": ["audit20250728"],
+      "2.1.3": ["audit20251007"]
+    },
+    "LibBytes": {
+      "1.0.0": ["audit20250508"],
+      "1.1.0": ["audit20260720"]
+    },
+    "LibDiamond": {
+      "1.0.0": ["audit20250508"]
+    },
+    "LibDiamondLoupe": {
+      "1.0.0": ["audit20250508"]
+    },
+    "LibSwap": {
+      "1.0.0": ["audit20250508"],
+      "1.1.0": ["audit20250610"]
+    },
+    "LibUtil": {
+      "1.0.0": ["audit20250508"]
+    },
+    "LiFiData": {
+      "1.0.0": ["audit20250718"],
+      "1.0.1": ["audit20251007"],
+      "1.0.2": ["audit20260716"]
+    },
+    "LiFiDiamond": {
+      "1.0.0": ["audit20250508"]
+    },
+    "LiFiDEXAggregator": {
+      "1.0.0": ["audit20240201"],
+      "1.1.0": ["audit20250117_1"],
+      "1.2.0": ["audit20250117_2"],
+      "1.3.0": ["audit20250117_3"],
+      "1.4.0": ["audit20250117_4"],
+      "1.5.0": ["audit20241203"],
+      "1.5.1": ["audit20250109_3"],
+      "1.6.0": ["audit20250109_2", "audit20250508"],
+      "1.7.0": ["audit20250411"],
+      "1.8.0": ["audit20250422"],
+      "1.9.0": ["audit20250510"],
+      "1.10.0": ["audit20250608"],
+      "1.11.0": ["audit20250630"],
+      "1.12.0": ["audit20250728"]
+    },
+    "LiFiIntentEscrowFacet": {
+      "1.0.0": ["audit20251119"],
+      "1.1.0": ["audit20260130"],
+      "1.0.1": ["audit20260205"],
+      "1.1.1": ["audit20260205"],
+      "1.1.2": ["audit20260608"]
+    },
+    "LiFiIntentEscrowFacetV2": {
+      "1.0.0": ["audit20260630"]
+    },
+    "LiFiTimelockController": {
+      "1.0.0": ["audit20250110_2", "audit20250508"],
+      "1.0.1": ["audit20250706"]
+    },
+    "LiFuelFeeCollector": {
+      "1.0.2": ["audit20250109_3", "audit20250508"]
+    },
+    "LIFuelFacet": {
+      "1.0.0": ["audit20251119"]
+    },
+    "LidoWrapper": {
+      "1.0.0": ["audit20250610"]
+    },
+    "MayanFacet": {
+      "1.0.0": ["audit20250508"],
+      "1.1.0": ["audit20250228"],
+      "1.2.0": ["audit20250327"],
+      "1.2.1": ["audit20250718"],
+      "1.2.2": ["audit20250825"],
+      "1.2.4": ["audit20260320"],
+      "1.3.0": ["audit20260610"],
+      "2.0.0": ["audit20260722"]
+    },
+    "MegaETHBridgeFacet": {
+      "1.0.0": ["audit20251203_1"]
+    },
+    "NEARIntentsFacet": {
+      "1.0.0": ["audit20251216"]
+    },
+    "OFTComposeMsgCodec": {
+      "1.0.0": ["audit20250508"]
+    },
+    "OmniBridgeFacet": {
+      "1.0.0": ["audit20250508"]
+    },
+    "OptimismBridgeFacet": {
+      "1.0.0": ["audit20250508"]
+    },
+    "OwnershipFacet": {
+      "1.0.0": ["audit20250508"]
+    },
+    "OutputValidator": {
+      "1.0.0": ["audit20260603"]
+    },
+    "Patcher": {
+      "1.0.0": ["audit20250730"],
+      "1.0.1": ["audit20251208"]
+    },
+    "PaxosTransitFacet": {
+      "1.0.0": ["audit20260708"]
+    },
+    "PeripheryRegistryFacet": {
+      "1.0.0": ["audit20250508"]
+    },
+    "Permit2Proxy": {
+      "1.0.0": ["audit20241122"],
+      "1.0.1": ["audit20250110_1"],
+      "1.0.2": ["audit20250109_3"],
+      "1.0.3": ["audit20250415", "audit20250508"],
+      "1.0.4": ["audit20250706_01"]
+    },
+    "PioneerFacet": {
+      "1.0.0": ["audit20250626"]
+    },
+    "PolygonBridgeFacet": {
+      "1.0.0": ["audit20250508"]
+    },
+    "PolymerCCTPFacet": {
+      "1.0.0": ["audit20251201"],
+      "2.0.0": ["audit20260216"],
+      "2.0.1": ["audit20260423"],
+      "2.1.0": ["audit20260528"],
+      "3.0.0": ["audit20260716"],
+      "3.1.0": ["audit20260731"]
+    },
+    "Receiver": {
+      "2.0.3": ["audit20250109_3"],
+      "2.1.0": ["audit20250109_2", "audit20250508"]
+    },
+    "ReceiverAcrossV3": {
+      "1.0.0": ["audit20241007"],
+      "1.0.1": ["audit20241206"],
+      "1.0.2": ["audit20250110_1"],
+      "1.1.0": ["audit20250109_2", "audit20250508"]
+    },
+    "ReceiverAcrossV4": {
+      "1.0.0": ["audit20250901"]
+    },
+    "ReceiverChainflip": {
+      "1.0.0": ["audit20250305", "audit20250508"],
+      "1.0.1": ["audit20250718"]
+    },
+    "ReceiverOIF": {
+      "1.0.0": ["audit20251215"]
+    },
+    "ReceiverStargateV2": {
+      "1.0.1": ["audit20250109_3"],
+      "1.1.0": ["audit20250109_2", "audit20250508"]
+    },
+    "RelayDepositoryFacet": {
+      "1.0.0": ["audit20250825_1"]
+    },
+    "RelayFacet": {
+      "1.0.0": ["audit20241202", "audit20250508"],
+      "1.0.1": ["audit20250718"]
+    },
+    "RelayerCelerIM": {
+      "1.0.3": ["audit20250109_3"],
+      "2.1.0": ["audit20250109_2"],
+      "2.1.1": ["audit20250109_3", "audit20250508"]
+    },
+    "ReentrancyGuard": {
+      "1.0.0": ["audit20250508"]
+    },
+    "SquidFacet": {
+      "1.0.0": ["audit20250508"]
+    },
+    "StandardizedCallFacet": {
+      "1.1.0": ["audit20250508"]
+    },
+    "StargateFacet": {
+      "2.2.0": ["audit20250508"]
+    },
+    "StargateFacetV2": {
+      "1.0.1": ["audit20240814", "audit20250508"]
+    },
+    "SupersetFacet": {
+      "1.0.0": ["audit20260701"],
+      "1.1.0": ["audit20260729"]
+    },
+    "SwapperV2": {
+      "1.0.0": ["audit20250508"],
+      "1.0.1": ["audit20250718"],
+      "1.1.0": ["audit20250629_1"],
+      "1.2.0": ["audit20251229"]
+    },
+    "SymbiosisFacet": {
+      "1.0.0": ["audit20250508"],
+      "2.0.0": ["audit20260721"]
+    },
+    "ThorSwapFacet": {
+      "1.2.1": ["audit20250109_1", "audit20250508"]
+    },
+    "TokenWrapper": {
+      "1.0.1": ["audit20250109_3"],
+      "1.1.0": ["audit20250109_2", "audit20250508"],
+      "1.2.0": ["audit20251225"],
+      "1.2.1": ["audit20251231"]
+    },
+    "TransferrableOwnership": {
+      "1.0.0": ["audit20250508"]
+    },
+    "UnitFacet": {
+      "1.0.0": ["audit20251007"],
+      "1.0.1": ["audit20251203_2"]
+    },
+    "Validatable": {
+      "1.0.0": ["audit20250508"]
+    },
+    "WhitelistManagerFacet": {
+      "1.0.0": ["audit20251104", "audit20251104_1"],
+      "1.1.0": ["audit20251229"]
+    },
+    "WithdrawFacet": {
+      "1.0.0": ["audit20250508"]
+    },
+    "WithdrawablePeriphery": {
+      "1.0.0": ["audit20241014", "audit20250508"],
+      "1.0.1": ["audit20250706"]
+    }
+  }
+}

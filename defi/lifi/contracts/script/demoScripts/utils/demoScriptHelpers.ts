@@ -1,0 +1,1171 @@
+import path from 'path'
+import { fileURLToPath } from 'url'
+
+import { isTronNetworkKey } from '@lifi/tron-devkit'
+import { getAssociatedTokenAddressSync } from '@solana/spl-token'
+import { Keypair, PublicKey } from '@solana/web3.js'
+// @ts-expect-error - bs58 types not available
+import bs58 from 'bs58'
+import { consola } from 'consola'
+import { config } from 'dotenv'
+import {
+  BigNumber,
+  constants,
+  Contract,
+  providers,
+  utils,
+  Wallet,
+} from 'ethers'
+import {
+  createPublicClient,
+  createWalletClient,
+  formatEther,
+  formatUnits,
+  getAddress,
+  getContract,
+  http,
+  parseAbi,
+  toHex,
+  zeroAddress,
+  type Abi,
+  type PublicClient,
+  type WalletClient,
+} from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
+
+import globalConfig from '../../../config/global.json'
+import networks from '../../../config/networks.json'
+import type { ILiFi } from '../../../typechain'
+import { ERC20__factory } from '../../../typechain'
+import type { LibSwap } from '../../../typechain/AcrossFacetV4'
+import { EnvironmentEnum, type SupportedChain } from '../../common/types'
+import { getEnvVar, getRPCEnvVarName, node_url } from '../../utils/utils'
+import {
+  getTransportConfigFromRpcUrl,
+  getViemChainForNetworkName,
+} from '../../utils/viemScriptHelpers'
+
+config()
+
+export const DEV_WALLET_ADDRESS = globalConfig.devWallet
+
+// NON_EVM_ADDRESS constant from LiFiData.sol - used as receiver address when bridging to non-EVM chains
+export const NON_EVM_ADDRESS = getAddress(
+  '0x11f111f111f111F111f111f111F111f111f111F1'
+)
+
+export const DEFAULT_DEST_PAYLOAD_ABI = [
+  'bytes32', // Transaction Id
+  'tuple(address callTo, address approveTo, address sendingAssetId, address receivingAssetId, uint256 fromAmount, bytes callData, bool requiresDeposit)[]', // Swap Data
+  'address', // Receiver
+]
+
+export enum ITransactionTypeEnum {
+  ERC20, // bridge ERC20 only
+  NATIVE, // bridge native only
+  ERC20_WITH_SRC, // swap and bridge ERC20
+  NATIVE_WITH_SRC, // swap and bridge native
+  ERC20_WITH_DEST, // bridge ERC20 with destination call
+  NATIVE_WITH_DEST, // bridge native with destination call
+}
+
+export const isNativeTX = (type: ITransactionTypeEnum): boolean => {
+  return (
+    type === ITransactionTypeEnum.NATIVE ||
+    type === ITransactionTypeEnum.NATIVE_WITH_DEST ||
+    type === ITransactionTypeEnum.NATIVE_WITH_SRC
+  )
+}
+
+// Common token addresses on various chains
+export const ADDRESS_USDC_ETH = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'
+export const ADDRESS_USDT_ETH = '0xdAC17F958D2ee523a2206206994597C13D831ec7'
+export const ADDRESS_USDC_POL = '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359'
+export const ADDRESS_USDT_POL = '0xc2132D05D31c914a87C6611C10748AEb04B58e8F'
+export const ADDRESS_USDC_OPT = '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85'
+export const ADDRESS_USDT_OPT = '0x94b008aA00579c1307B0EF2c499aD98a8ce58e58'
+export const ADDRESS_USDC_ARB = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831'
+export const ADDRESS_USDT_ARB = '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9'
+export const ADDRESS_USDC_SOL_BYTES32 =
+  '0xc6fa7af3bedbad3a3d65f36aabc97431b1bbe4c2d2f6e0e47ca60203452f5d61' // [pre-commit-checker: not a secret]
+export const ADDRESS_USDC_SOL = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
+export const ADDRESS_USDCe_OPT = '0x7F5c764cBc14f9669B88837ca1490cCa17c31607'
+export const ADDRESS_WETH_ETH = '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2'
+export const ADDRESS_WETH_OPT = '0x4200000000000000000000000000000000000006'
+export const ADDRESS_WETH_POL = '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619'
+export const ADDRESS_WETH_ARB = '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1'
+export const ADDRESS_WETH_BASE = '0x4200000000000000000000000000000000000006'
+export const ADDRESS_WMATIC_POL = '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270'
+export const ADDRESS_USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
+
+// common uniswap addresses on various chains
+export const ADDRESS_UNISWAP_ETH = '0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D'
+export const ADDRESS_UNISWAP_BSC = '0x4752ba5dbc23f44d87826276bf6fd6b1c372ad24'
+export const ADDRESS_UNISWAP_POL = '0xedf6066a2b290C185783862C7F4776A2C8077AD1'
+export const ADDRESS_UNISWAP_OPT = '0x4A7b5Da61326A6379179b40d00F57E5bbDC962c2'
+export const ADDRESS_UNISWAP_ARB = '0x4752ba5dbc23f44d87826276bf6fd6b1c372ad24'
+export const ADDRESS_UNISWAP_BASE = '0x6BDED42c6DA8FBf0d2bA55B2fa120C5e0c8D7891'
+// const UNISWAP_ADDRESS_DST = '0x4A7b5Da61326A6379179b40d00F57E5bbDC962c2' // Uniswap OPT
+
+// LiFi chain ID for Solana (from LiFiData.sol)
+export const LIFI_CHAIN_ID_SOLANA = 1151111081099710n
+
+/// ############# HELPER FUNCTIONS ###################### ///
+
+///
+export const leftPadAddressToBytes32 = (address: string): string => {
+  // Convert address to bytes32 format: pad with zeros to make it 32 bytes
+  return '0x000000000000000000000000' + address.slice(2)
+}
+
+/**
+ * Derives a Solana address from an Ethereum private key
+ * Uses the first 32 bytes of the EVM private key as seed for Ed25519 keypair generation
+ * @param ethPrivateKey - Ethereum private key (with or without 0x prefix)
+ * @returns Solana address in base58 format
+ */
+export const deriveSolanaAddress = (ethPrivateKey: string): string => {
+  // Remove '0x' prefix if present
+  const seed = ethPrivateKey.replace('0x', '')
+
+  // Use first 32 bytes (64 hex chars) of the private key as seed for Ed25519
+  const seedBytes = new Uint8Array(32)
+  for (let i = 0; i < 32; i++) {
+    seedBytes[i] = parseInt(seed.slice(i * 2, i * 2 + 2), 16)
+  }
+
+  // Create Solana keypair from seed
+  const keypair = Keypair.fromSeed(seedBytes)
+  return keypair.publicKey.toBase58()
+}
+
+/**
+ * Converts a Solana base58 address to bytes32 format for non-EVM address fields
+ * Solana addresses are 32-byte Ed25519 public keys encoded in base58
+ * @param solanaAddress - Solana address in base58 format
+ * @returns Hex string in bytes32 format (0x...)
+ */
+export const solanaAddressToBytes32 = (
+  solanaAddress: string
+): `0x${string}` => {
+  // Decode base58 to get raw 32 bytes
+  const addressBytes = bs58.decode(solanaAddress)
+
+  if (addressBytes.length !== 32) {
+    throw new Error(
+      `Invalid Solana address length: ${addressBytes.length} bytes (expected 32)`
+    )
+  }
+
+  // Convert to hex string
+  return toHex(addressBytes)
+}
+
+/**
+ * Converts a bytes32 hex value (e.g. from event logs: mintRecipient, nonEVMReceiver) to Solana base58 address.
+ * Inverse of solanaAddressToBytes32.
+ * @param bytes32Hex - 32-byte value as hex string (with or without 0x prefix)
+ * @returns Solana address in base58 format
+ */
+export const bytes32ToSolanaAddress = (bytes32Hex: string): string => {
+  const hex = bytes32Hex.replace(/^0x/i, '')
+  if (hex.length !== 64) {
+    throw new Error(
+      `Invalid bytes32 length: ${hex.length} hex chars (expected 64)`
+    )
+  }
+  const bytes = new Uint8Array(32)
+  for (let i = 0; i < 32; i++) {
+    bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16)
+  }
+  return bs58.encode(bytes)
+}
+
+/**
+ * Computes the Associated Token Account (ATA) for a Solana address and token mint, returns bytes32 hex.
+ * Used when bridging to Solana (e.g. Polymer CCTP) where CCTP v2 requires mintRecipient to be the ATA.
+ * @param solanaAddress - Solana wallet address in base58 format
+ * @param tokenMint - Token mint address in base58 format (e.g. USDC on Solana)
+ * @returns ATA address as bytes32 hex string
+ */
+export async function computeSolanaATABytes32(
+  solanaAddress: string,
+  tokenMint: string
+): Promise<`0x${string}`> {
+  const ownerPublicKey = new PublicKey(solanaAddress)
+  const mintPublicKey = new PublicKey(tokenMint)
+  const ata = getAssociatedTokenAddressSync(mintPublicKey, ownerPublicKey)
+  const ataBytes = ata.toBytes()
+  const ataHex = '0x' + Buffer.from(ataBytes).toString('hex').padStart(64, '0')
+  return ataHex as `0x${string}`
+}
+
+/**
+ * Converts a receiver address to bytes32 format, handling both EVM and non-EVM addresses
+ * @param receiver - EVM address or NON_EVM_ADDRESS sentinel
+ * @param nonEVMReceiver - Optional bytes32 non-EVM receiver (e.g., Solana address)
+ * @returns Receiver address as bytes32
+ */
+export const receiverToBytes32 = (
+  receiver: string,
+  nonEVMReceiver?: `0x${string}`
+): `0x${string}` => {
+  // If bridging to non-EVM chain, use the nonEVMReceiver
+  if (receiver === NON_EVM_ADDRESS && nonEVMReceiver) {
+    return nonEVMReceiver
+  }
+
+  // Convert EVM address to bytes32 (left-pad with zeros)
+  return `0x${BigInt(receiver).toString(16).padStart(64, '0')}` as `0x${string}`
+}
+
+export const getProvider = (
+  networkName: string
+): providers.FallbackProvider => {
+  const rpcProviderSrc = new providers.JsonRpcProvider(node_url(networkName))
+  return new providers.FallbackProvider([rpcProviderSrc])
+}
+
+export const getWalletFromPrivateKeyInDotEnv = (
+  provider: providers.FallbackProvider
+): Wallet => {
+  return new Wallet(process.env.PRIVATE_KEY as string, provider)
+}
+
+export const sendTransaction = async (
+  wallet: Wallet,
+  to: string,
+  data: string,
+  msgValue = BigNumber.from(0)
+) => {
+  const gasPrice = await wallet.provider.getGasPrice()
+  const maxPriorityFeePerGas = gasPrice.mul(2)
+  const maxFeePerGas = gasPrice.mul(3)
+
+  if (!maxPriorityFeePerGas || !maxFeePerGas)
+    throw Error('error while estimating gas fees')
+
+  const tx = {
+    to,
+    data,
+    value: msgValue,
+    maxPriorityFeePerGas,
+    maxFeePerGas,
+    gasLimit: await wallet.estimateGas({ to, data, value: msgValue }),
+  }
+  // console.log(`tx: ${JSON.stringify(tx, null, 2)}`)
+
+  const transactionResponse = await wallet.sendTransaction(tx)
+  // console.log('transaction hash:', transactionResponse.hash)
+
+  // Wait for the transaction to be mined
+  await transactionResponse.wait()
+  // console.log('transaction mined')
+
+  return transactionResponse
+}
+
+// makes sure the sending wallet has sufficient balance and registers approval in the sending token from wallet to our diamond
+export const ensureBalanceAndAllowanceToDiamond = async (
+  tokenAddress: string,
+  wallet: Wallet,
+  diamondAddress: string,
+  amount: BigNumber,
+  isNative = false
+) => {
+  // check allowance only for ERC20
+  const token = ERC20__factory.connect(tokenAddress, wallet)
+  if (!isNative) {
+    // get current allowance in srcToken
+    const allowance = await token.allowance(wallet.address, diamondAddress)
+    // console.log('current allowance: %s ', allowance)
+
+    // set allowance
+    if (amount.gt(allowance)) {
+      const approveTxData = token.interface.encodeFunctionData('approve', [
+        diamondAddress,
+        amount,
+      ])
+
+      await sendTransaction(wallet, tokenAddress, approveTxData)
+      console.log(`allowance set to: ${amount} `)
+    }
+  }
+
+  // check if wallet has sufficient balance
+  let balance
+  if (isNative || tokenAddress === constants.AddressZero)
+    balance = await wallet.getBalance()
+  else balance = await token.balanceOf(wallet.address)
+  if (amount.gt(balance))
+    throw Error(
+      `Wallet has insufficient balance (should have ${amount} but only has ${balance})`
+    )
+  console.log(
+    `Current wallet balance in sendingAsset is sufficient: ${balance}`
+  )
+}
+
+export const getUniswapSwapDataERC20ToERC20 = async (
+  uniswapAddress: string,
+  chainId: number,
+  sendingAssetId: string,
+  receivingAssetId: string,
+  fromAmount: BigNumber,
+  receiverAddress: string,
+  requiresDeposit = true,
+  minAmountOut = 0,
+  deadline = Math.floor(Date.now() / 1000) + 60 * 60
+) => {
+  // prepare destSwap callData
+  const provider = getProviderForChainId(chainId)
+  const UNISWAP_ABI = [
+    'function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external payable returns (uint[] memory amounts)',
+  ] as const
+
+  const uniswap = new Contract(
+    uniswapAddress,
+    UNISWAP_ABI,
+    provider
+  ) as Contract & {
+    populateTransaction: {
+      swapExactTokensForTokens: (
+        amountIn: BigNumber,
+        amountOutMin: BigNumber,
+        path: string[],
+        to: string,
+        deadline: number
+      ) => Promise<{ data: string }>
+    }
+  }
+
+  const path = [sendingAssetId, receivingAssetId]
+
+  // get minAmountOut from Uniswap router
+  console.log(`finalFromAmount  : ${fromAmount}`)
+
+  const finalMinAmountOut = BigNumber.from(
+    minAmountOut === 0
+      ? (
+          await getAmountsOutUniswap(
+            uniswapAddress,
+            chainId,
+            [sendingAssetId, receivingAssetId],
+            fromAmount
+          )
+        )[1]
+      : minAmountOut
+  )
+  console.log(`finalMinAmountOut: ${finalMinAmountOut}`)
+
+  const uniswapCalldata =
+    await uniswap.populateTransaction.swapExactTokensForTokens(
+      fromAmount,
+      finalMinAmountOut,
+      path,
+      receiverAddress,
+      deadline
+    )
+
+  if (!uniswapCalldata) throw Error('Could not create Uniswap calldata')
+
+  // construct LibSwap.SwapData
+  const swapData: LibSwap.SwapDataStruct = {
+    callTo: uniswapAddress,
+    approveTo: uniswapAddress,
+    sendingAssetId,
+    receivingAssetId,
+    fromAmount,
+    callData: uniswapCalldata.data,
+    requiresDeposit,
+  }
+
+  return swapData
+}
+
+export const getUniswapDataERC20toExactETH = async (
+  uniswapAddress: string,
+  chainId: number,
+  sendingAssetId: string, // USDT
+  exactAmountOut: BigNumber, // Desired ETH output
+  receiverAddress: string,
+  requiresDeposit = true,
+  deadline = Math.floor(Date.now() / 1000) + 60 * 60
+) => {
+  // Get provider for the chain
+  const provider = getProviderForChainId(chainId)
+
+  const uniswap = new Contract(
+    uniswapAddress,
+    [
+      'function getAmountsIn(uint amountOut, address[] calldata path) external view returns (uint[] memory amounts)',
+      'function swapTokensForExactETH(uint amountOut, uint amountInMax, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)',
+    ],
+    provider
+  ) as Contract & {
+    populateTransaction: {
+      swapTokensForExactETH: (
+        amountOut: BigNumber,
+        amountInMax: BigNumber,
+        path: string[],
+        to: string,
+        deadline: number
+      ) => Promise<{ data: string }>
+    }
+  }
+
+  const path = [sendingAssetId, ADDRESS_WETH_OPT]
+
+  try {
+    // Get the required USDT input amount for the exact ETH output
+    const amounts = await uniswap.getAmountsIn(exactAmountOut, path)
+    const requiredUsdtAmount = amounts[0]
+    const maxAmountIn = BigNumber.from(requiredUsdtAmount).mul(105).div(100) // 5% max slippage
+
+    console.log('Required USDT input:', requiredUsdtAmount.toString())
+    console.log('Max USDT input with slippage:', maxAmountIn.toString())
+    console.log('Exact ETH output:', exactAmountOut.toString())
+
+    const uniswapCalldata = (
+      await uniswap.populateTransaction.swapTokensForExactETH(
+        exactAmountOut,
+        maxAmountIn,
+        path,
+        receiverAddress,
+        deadline
+      )
+    ).data
+
+    if (!uniswapCalldata) throw Error('Could not create Uniswap calldata')
+
+    return {
+      callTo: uniswapAddress,
+      approveTo: uniswapAddress,
+      sendingAssetId, // USDT address
+      receivingAssetId: constants.AddressZero, // ETH (zero address)
+      fromAmount: maxAmountIn, // Required USDT amount with slippage
+      callData: uniswapCalldata,
+      requiresDeposit,
+    }
+  } catch (error) {
+    console.error('Error in Uniswap contract interaction:', error)
+    throw error
+  }
+}
+
+export const getUniswapDataERC20toExactERC20 = async (
+  uniswapAddress: string,
+  chainId: number,
+  sendingAssetId: string,
+  receivingAssetId: string,
+  exactAmountOut: BigNumber,
+  receiverAddress: string,
+  requiresDeposit = true,
+  deadline = Math.floor(Date.now() / 1000) + 60 * 60
+) => {
+  // Get provider for the chain
+  const provider = getProviderForChainId(chainId)
+
+  const uniswap = new Contract(
+    uniswapAddress,
+    [
+      'function getAmountsIn(uint amountOut, address[] calldata path) external view returns (uint[] memory amounts)',
+      'function swapTokensForExactTokens(uint amountOut, uint amountInMax, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)',
+    ],
+    provider
+  ) as Contract & {
+    populateTransaction: {
+      swapTokensForExactTokens: (
+        amountOut: BigNumber,
+        amountInMax: BigNumber,
+        path: string[],
+        to: string,
+        deadline: number
+      ) => Promise<{ data: string }>
+    }
+  }
+
+  const path = [sendingAssetId, receivingAssetId]
+
+  try {
+    // Get the required input amount for the exact output
+    const amounts = await uniswap.getAmountsIn(exactAmountOut, path)
+    const requiredInputAmount = amounts[0]
+    const maxAmountIn = BigNumber.from(requiredInputAmount).mul(105).div(100) // 5% max slippage
+
+    console.log('Preparing Uniswap calldata for ERC20 to ERC20 swap:')
+    console.log('Input Token             :', sendingAssetId)
+    console.log('Output Token            :', receivingAssetId)
+    console.log('Required input amount   :', requiredInputAmount.toString())
+    console.log('Max input with slippage :', maxAmountIn.toString())
+    console.log('Exact output amount     :', exactAmountOut.toString())
+
+    const uniswapCalldata = (
+      await uniswap.populateTransaction.swapTokensForExactTokens(
+        exactAmountOut,
+        maxAmountIn,
+        path,
+        receiverAddress,
+        deadline
+      )
+    ).data
+
+    if (!uniswapCalldata) throw Error('Could not create Uniswap calldata')
+
+    return {
+      callTo: uniswapAddress,
+      approveTo: uniswapAddress,
+      sendingAssetId,
+      receivingAssetId,
+      fromAmount: maxAmountIn,
+      callData: uniswapCalldata,
+      requiresDeposit,
+    }
+  } catch (error) {
+    console.error('Error in Uniswap contract interaction:', error)
+    throw error
+  }
+}
+
+export const getUniswapSwapDataERC20ToETH = async (
+  uniswapAddress: string,
+  chainId: number,
+  sendingAssetId: string,
+  receivingAssetId: string,
+  fromAmount: BigNumber,
+  receiverAddress: string,
+  requiresDeposit = true,
+  minAmountOut = 0,
+  deadline = Math.floor(Date.now() / 1000) + 60 * 60
+) => {
+  // prepare destSwap callData
+  const provider = getProviderForChainId(chainId)
+  const UNISWAP_ABI = [
+    'function swapExactTokensForETH(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external payable returns (uint[] memory amounts)',
+  ] as const
+
+  const uniswap = new Contract(
+    uniswapAddress,
+    UNISWAP_ABI,
+    provider
+  ) as Contract & {
+    populateTransaction: {
+      swapExactTokensForETH: (
+        amountIn: BigNumber,
+        amountOutMin: BigNumber,
+        path: string[],
+        to: string,
+        deadline: number
+      ) => Promise<{ data: string }>
+    }
+  }
+
+  const path = [sendingAssetId, receivingAssetId]
+
+  // get minAmountOut from Uniswap router
+  console.log(`finalFromAmount  : ${fromAmount}`)
+
+  const finalMinAmountOut = BigNumber.from(
+    minAmountOut === 0
+      ? (
+          await getAmountsOutUniswap(
+            uniswapAddress,
+            chainId,
+            [sendingAssetId, receivingAssetId],
+            fromAmount
+          )
+        )[1]
+      : minAmountOut
+  )
+  console.log(`finalMinAmountOut: ${finalMinAmountOut}`)
+
+  const uniswapCalldata =
+    await uniswap.populateTransaction.swapExactTokensForETH(
+      fromAmount,
+      finalMinAmountOut,
+      path,
+      receiverAddress,
+      deadline
+    )
+
+  if (!uniswapCalldata) throw Error('Could not create Uniswap calldata')
+
+  // construct LibSwap.SwapData
+  const swapData: LibSwap.SwapDataStruct = {
+    callTo: uniswapAddress,
+    approveTo: uniswapAddress,
+    sendingAssetId,
+    receivingAssetId: '0x0000000000000000000000000000000000000000',
+    fromAmount,
+    callData: uniswapCalldata.data,
+    requiresDeposit,
+  }
+
+  return swapData
+}
+
+export const getAmountsOutUniswap = async (
+  uniswapAddress: string,
+  chainId: number,
+  path: string[],
+  fromAmount: BigNumber
+): Promise<string[]> => {
+  const provider = getProviderForChainId(chainId)
+  console.log('Getting amounts out from Uniswap:')
+  console.log('- Router:', uniswapAddress)
+  console.log('- Chain ID:', chainId)
+  console.log('- Path:', path)
+  console.log('- From Amount:', fromAmount.toString())
+
+  // prepare ABI
+  const uniswapABI = parseAbi([
+    'function getAmountsOut(uint256, address[]) public view returns(uint256[])',
+  ])
+
+  // get uniswap contract
+  const uniswap = new Contract(
+    uniswapAddress,
+    uniswapABI,
+    provider
+  ) as Contract & {
+    callStatic: {
+      getAmountsOut: (amountIn: string, path: string[]) => Promise<string[]>
+    }
+  }
+
+  try {
+    // Call Uniswap contract to get amountsOut
+    const amounts = await uniswap.callStatic.getAmountsOut(
+      fromAmount.toString(),
+      path
+    )
+
+    console.log(
+      'Amounts returned:',
+      amounts.map((a: any) => a.toString())
+    )
+
+    if (!amounts || amounts.length < 2)
+      throw new Error('Invalid amounts returned from Uniswap')
+
+    return amounts
+  } catch (error: any) {
+    console.error('Error calling Uniswap contract:', error)
+    throw new Error(`Failed to get amounts out: ${error.message}`)
+  }
+}
+
+export const getNetworkNameForChainId = (chainId: number): string => {
+  const network = Object.entries(networks).find(
+    ([, info]) => info.chainId === chainId
+  )
+
+  if (!network) throw Error(`Could not find a network with chainId ${chainId}`)
+
+  return network[0]
+}
+
+const getProviderForChainId = (chainId: number) => {
+  // get network name for chainId
+  const networkName = getNetworkNameForChainId(chainId)
+
+  // get provider for network name
+  const provider = getProvider(networkName)
+  if (!provider)
+    throw Error(`Could not find a provider for network ${networkName}`)
+  else return provider
+}
+
+/**
+ * Convert an Ethereum address to a 32-byte hexadecimal string.
+ * The address is stripped of its "0x" prefix and zero-padded to 64 characters.
+ *
+ */
+export const zeroPadAddressToBytes32 = (address: string): `0x${string}` => {
+  if (!/^0x[a-fA-F0-9]{40}$/.test(address))
+    throw new Error('Invalid Ethereum address format')
+
+  const hexAddress = address.replace(/^0x/, '')
+  return `0x${hexAddress.padStart(64, '0')}`
+}
+
+/**
+ * Converts an Ethereum address to a 32-byte hexadecimal string,
+ * mimicking Solidity's `bytes32(bytes20(uint160(address)))` conversion.
+ * The address is right-padded with zeros to fit into a 32-byte value.
+ *
+ * @param address - A valid Ethereum address (20 bytes).
+ * @returns A 32-byte hexadecimal string representation of the address.
+ */
+export function addressToBytes32RightPadded(address: string): `0x${string}` {
+  if (!/^0x[a-fA-F0-9]{40}$/.test(address))
+    throw new Error('Invalid Ethereum address format')
+
+  const hex = address.replace(/^0x/, '').toLowerCase()
+  return `0x${hex.padEnd(64, '0')}`
+}
+
+/**
+ * Normalize a private key to ensure it starts with "0x".
+ * If the private key already starts with "0x", it is returned unchanged.
+ *
+ */
+const normalizePrivateKey = (pk: string): `0x${string}` => {
+  // Private key should be 64 characters (32 bytes) excluding '0x'
+  const cleanPk = pk.replace(/^0x/, '')
+  if (!/^[a-fA-F0-9]{64}$/.test(cleanPk))
+    throw new Error('Invalid private key format')
+
+  if (!pk.startsWith('0x')) return `0x${pk}`
+
+  return pk as `0x${string}`
+}
+
+/**
+ * Return the correct RPC environment variable
+ * (e.g. `ETH_NODE_URI_ARBITRUM` or `ETH_NODE_URI_MAINNET`)
+ */
+const getRpcUrl = (chain: SupportedChain) => {
+  const envKey = getRPCEnvVarName(chain)
+  let rpcUrl = getEnvVar(envKey)
+
+  // TronGrid full-node root serves Tron's native HTTP API; viem needs /jsonrpc.
+  if (
+    isTronNetworkKey(chain) &&
+    !rpcUrl.replace(/\/+$/, '').endsWith('/jsonrpc')
+  ) {
+    rpcUrl = `${rpcUrl.replace(/\/+$/, '')}/jsonrpc`
+  }
+
+  return rpcUrl
+}
+
+/**
+ * Utility function to dynamically import the deployments file for a chain.
+ */
+export const getDeployments = async (
+  chain: SupportedChain,
+  environment: EnvironmentEnum = EnvironmentEnum.staging
+) => {
+  const __dirname = path.dirname(fileURLToPath(import.meta.url))
+  const fileName =
+    environment === EnvironmentEnum.production
+      ? `${chain}.json`
+      : `${chain}.staging.json`
+  const filePath = path.resolve(__dirname, `../../../deployments/${fileName}`)
+
+  try {
+    const deployments = await import(filePath)
+    return deployments
+  } catch (error) {
+    throw new Error(
+      `Deployments file not found for ${chain} (${environment}): ${filePath}`
+    )
+  }
+}
+
+/**
+ * Sets up the environment for interacting with a blockchain network and its contracts.
+ *
+ * This function initializes public and wallet clients, retrieves deployment information,
+ * and prepares a specific contract instance for interaction.
+ */
+export const setupEnvironment = async (
+  chain: SupportedChain,
+  diamondABI: Abi | readonly unknown[] | null,
+  environment: EnvironmentEnum = EnvironmentEnum.staging,
+  customRpcUrl?: string
+) => {
+  // Use customRpcUrl if provided, otherwise fallback to getRpcUrl
+  const RPC_URL = customRpcUrl || getRpcUrl(chain)
+  const PRIVATE_KEY = getPrivateKeyForEnvironment(environment)
+  const typedPrivateKey = normalizePrivateKey(PRIVATE_KEY)
+
+  const viemChain = getViemChainForNetworkName(chain)
+
+  // Support RPC URLs with embedded credentials (user:pass@host); viem requires auth via header
+  const { url: transportUrl, fetchOptions } =
+    getTransportConfigFromRpcUrl(RPC_URL)
+  const transport = http(transportUrl, fetchOptions ? { fetchOptions } : {})
+
+  const publicClient = createPublicClient({
+    chain: viemChain,
+    transport,
+  })
+
+  const walletAccount = privateKeyToAccount(typedPrivateKey)
+
+  const walletClient = createWalletClient({
+    chain: viemChain,
+    transport,
+    account: walletAccount,
+  })
+
+  const deployments = diamondABI
+    ? await getDeployments(chain, environment)
+    : null
+
+  const client = { public: publicClient, wallet: walletClient }
+
+  const lifiDiamondAddress = deployments
+    ? (deployments.LiFiDiamond as `0x${string}`)
+    : null
+
+  const lifiDiamondContract =
+    diamondABI && lifiDiamondAddress
+      ? getContract({
+          address: lifiDiamondAddress,
+          abi: diamondABI,
+          client,
+        })
+      : null
+
+  return {
+    walletAccount,
+    lifiDiamondContract,
+    lifiDiamondAddress,
+    publicClient,
+    walletClient,
+    client,
+    chain: viemChain,
+  }
+}
+
+/**
+ * Retrieves a config value for a chain from a map keyed by chain (e.g. glacis airlift addresses).
+ */
+export function getConfigElement(
+  configKeyedByChain: Record<string, unknown>,
+  chain: SupportedChain
+): unknown
+/**
+ * Retrieves a specific element from the configuration for a given blockchain chain (config[chain][elementKey]).
+ */
+export function getConfigElement(
+  config: Record<string, any>,
+  chain: SupportedChain,
+  elementKey: string
+): any
+export function getConfigElement(
+  config: Record<string, any>,
+  chain: SupportedChain,
+  elementKey?: string
+): any {
+  if (elementKey === undefined) {
+    const value = config[chain]
+    if (value === undefined || value === null)
+      throw new Error(`No config found for chain '${chain}' in the config.`)
+    return value
+  }
+  const chainConfig = config[chain]
+  if (!chainConfig || !chainConfig[elementKey])
+    throw new Error(
+      `Element '${elementKey}' not found for chain '${chain}' in the config.`
+    )
+  return chainConfig[elementKey]
+}
+
+/**
+ * Executes a blockchain transaction, validates its receipt (optional), and handles errors.
+ */
+export const getUniswapDataExactETHToERC20 = async (
+  uniswapAddress: string,
+  chainId: number,
+  exactETHAmount: bigint,
+  receivingAssetId: string,
+  receiverAddress: string,
+  requiresDeposit = false,
+  deadline = Math.floor(Date.now() / 1000) + 60 * 60
+) => {
+  const provider = getProviderForChainId(chainId)
+
+  const uniswap = new Contract(
+    uniswapAddress,
+    [
+      'function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory amounts)',
+      'function swapExactETHForTokens(uint amountOutMin, address[] calldata path, address to, uint deadline) external payable returns (uint[] memory amounts)',
+    ],
+    provider
+  ) as Contract & {
+    callStatic: {
+      getAmountsOut: (amountIn: string, path: string[]) => Promise<string[]>
+    }
+    populateTransaction: {
+      swapExactETHForTokens: (
+        amountOutMin: BigNumber,
+        path: string[],
+        to: string,
+        deadline: number
+      ) => Promise<{ data: string }>
+    }
+  }
+
+  const path = [ADDRESS_WETH_ETH, receivingAssetId]
+
+  try {
+    // Get the expected output amount for the exact ETH input
+    const amounts = await uniswap.callStatic.getAmountsOut(
+      exactETHAmount.toString(),
+      path
+    )
+    const expectedOutput = amounts[1] as string
+    const minAmountOut = BigNumber.from(expectedOutput).mul(95).div(100) // 5% slippage tolerance
+
+    console.log('Exact ETH input:', formatEther(exactETHAmount))
+    console.log('Expected USDC output:', formatUnits(BigInt(expectedOutput), 6))
+    console.log(
+      'Min USDC output with slippage:',
+      formatUnits(minAmountOut.toBigInt(), 6)
+    )
+
+    const uniswapCalldata = (
+      await uniswap.populateTransaction.swapExactETHForTokens(
+        minAmountOut,
+        path,
+        receiverAddress,
+        deadline
+      )
+    ).data
+
+    if (!uniswapCalldata) throw Error('Could not create Uniswap calldata')
+
+    return {
+      callTo: uniswapAddress,
+      approveTo: uniswapAddress,
+      sendingAssetId: zeroAddress, // ETH
+      receivingAssetId,
+      fromAmount: exactETHAmount,
+      callData: uniswapCalldata,
+      requiresDeposit,
+    }
+  } catch (error) {
+    console.error('Error in Uniswap contract interaction:', error)
+    throw error
+  }
+}
+
+export const executeTransaction = async <T>(
+  transaction: () => Promise<T>,
+  transactionDescription: string,
+  publicClient?: any,
+  validateReceipt = false
+): Promise<T | null> => {
+  try {
+    console.info(`Executing: ${transactionDescription}`)
+    const result = await transaction()
+    console.info(
+      `${transactionDescription} broadcasted successfully with hash: ${result}`
+    )
+
+    if (validateReceipt && publicClient) {
+      console.info(`Waiting for transaction receipt...`)
+      const receipt = await publicClient.waitForTransactionReceipt({
+        hash: result as any,
+      })
+      if (receipt.status === 'success')
+        console.info(
+          `${transactionDescription} completed successfully, included in a block.`
+        )
+      else {
+        console.error(
+          `${transactionDescription} failed. Receipt failure:`,
+          receipt
+        )
+        process.exit(1)
+      }
+    }
+
+    return result
+  } catch (error) {
+    console.error(`${transactionDescription} failed:`, error)
+    process.exit(1)
+  }
+}
+
+/**
+ * Ensures that the address wallet has the required token balance.
+ */
+export const ensureBalance = async (
+  asset: any,
+  walletAddress: string,
+  requiredAmount: bigint,
+  publicClient: any = null
+): Promise<void> => {
+  let balance: bigint
+
+  if (asset === zeroAddress)
+    // Special case: asset represents the native token (e.g. ETH).
+    // Retrieve the native balance using the public client.
+    balance = await publicClient.getBalance({ address: walletAddress })
+  // Standard ERC20 balance check using the asset's balanceOf method.
+  else balance = (await asset.read.balanceOf([walletAddress])) as bigint
+
+  if (balance < requiredAmount) {
+    console.error(
+      `Insufficient balance. Required: ${requiredAmount}, Available: ${balance}`
+    )
+    process.exit(1)
+  } else console.info(`Balance: ${balance}`)
+}
+
+/**
+ * Ensures that the owner wallet has approved the required allowance for a spender.
+ */
+export const ensureAllowance = async (
+  tokenContract: any,
+  ownerAddress: string,
+  spenderAddress: string,
+  requiredAmount: bigint,
+  publicClient: any
+): Promise<void> => {
+  const allowance: bigint = (await tokenContract.read.allowance([
+    ownerAddress,
+    spenderAddress,
+  ])) as bigint
+
+  if (allowance < requiredAmount) {
+    console.info(`Required amount: ${requiredAmount}`)
+    console.info(`Allowance is insufficient. Approving required amount...`)
+    const hash = await tokenContract.write.approve([
+      spenderAddress,
+      requiredAmount,
+    ])
+    console.info(`Approval transaction broadcasted (hash): ${hash}`)
+
+    const receipt = await publicClient.waitForTransactionReceipt({ hash })
+    if (receipt.status === 'success')
+      console.info(
+        'Token allowance approved successfully, included in a block.'
+      )
+    else {
+      console.error(
+        'Approval transaction failed. Receipt indicates a failure:',
+        receipt
+      )
+      process.exit(1)
+    }
+  } else console.info('Sufficient allowance already exists.')
+}
+
+export function parseAmountToHumanReadable(
+  amount: bigint | string,
+  decimals: number | bigint
+): number {
+  const rawAmount = typeof amount === 'bigint' ? amount : BigInt(amount)
+  const rawDecimals = typeof decimals === 'bigint' ? Number(decimals) : decimals
+  return Number(formatUnits(rawAmount, rawDecimals))
+}
+
+export const getPrivateKeyForEnvironment = (
+  environment: EnvironmentEnum
+): string => {
+  return environment === EnvironmentEnum.production
+    ? getEnvVar('PRIVATE_KEY_PRODUCTION')
+    : getEnvVar('PRIVATE_KEY')
+}
+
+/**
+ * Creates a contract object with the expected interface for helper functions.
+ *
+ * This function creates a standardized contract interface that provides type-safe
+ * access to common ERC20 token functions (balanceOf, allowance, approve) with
+ * proper error handling for each async operation.
+ *
+ * @param address - The contract address as a string
+ * @param abi - The contract ABI definition
+ * @param publicClient - The viem public client for read operations
+ * @param walletClient - The viem wallet client for write operations
+ * @returns An object with read and write methods for token operations
+ */
+export const createContractObject = (
+  address: string,
+  abi: Abi,
+  publicClient: PublicClient,
+  walletClient: WalletClient
+) => ({
+  read: {
+    balanceOf: async (args: [string]): Promise<bigint> => {
+      try {
+        return (await publicClient.readContract({
+          address: address as `0x${string}`,
+          abi,
+          functionName: 'balanceOf',
+          args,
+        })) as bigint
+      } catch (error) {
+        console.error(`[${address}] Failed to read balanceOf:`, error)
+        throw new Error(
+          `Failed to read balanceOf for address ${args[0]}: ${error}`
+        )
+      }
+    },
+    allowance: async (args: [string, string]): Promise<bigint> => {
+      try {
+        return (await publicClient.readContract({
+          address: address as `0x${string}`,
+          abi,
+          functionName: 'allowance',
+          args,
+        })) as bigint
+      } catch (error) {
+        console.error(`[${address}] Failed to read allowance:`, error)
+        throw new Error(
+          `Failed to read allowance for owner ${args[0]} and spender ${args[1]}: ${error}`
+        )
+      }
+    },
+  },
+  write: {
+    approve: async (args: [string, bigint]): Promise<`0x${string}`> => {
+      try {
+        return await walletClient.writeContract({
+          address: address as `0x${string}`,
+          abi,
+          functionName: 'approve',
+          args,
+        } as any)
+      } catch (error) {
+        console.error(`[${address}] Failed to approve:`, error)
+        throw new Error(
+          `Failed to approve spender ${args[0]} for amount ${args[1]}: ${error}`
+        )
+      }
+    },
+  },
+})
+
+/**
+ * Logs a BridgeDataStruct in a formatted, human-readable way
+ * @param bridgeData The BridgeDataStruct to log
+ */
+export function logBridgeDataStruct(bridgeData: ILiFi.BridgeDataStruct): void {
+  // Convert transactionId to hex string if it's bytes
+  // Handle both string (hex) and BytesLike (Uint8Array, etc.) types
+  let transactionIdHex: string
+  if (typeof bridgeData.transactionId === 'string') {
+    transactionIdHex = bridgeData.transactionId
+  } else {
+    // It's BytesLike (Uint8Array or similar), convert to hex
+    transactionIdHex = utils.hexlify(
+      bridgeData.transactionId as utils.BytesLike
+    )
+  }
+
+  // Format referrer address
+  const referrerDisplay =
+    bridgeData.referrer === constants.AddressZero
+      ? `${bridgeData.referrer} (zero address)`
+      : bridgeData.referrer
+
+  consola.info('📋 BridgeData:')
+  consola.info(`  transactionId:     ${transactionIdHex}`)
+  consola.info(`  bridge:           ${bridgeData.bridge}`)
+  consola.info(`  integrator:       ${bridgeData.integrator}`)
+  consola.info(`  referrer:         ${referrerDisplay}`)
+  consola.info(`  sendingAssetId:   ${bridgeData.sendingAssetId}`)
+  consola.info(`  receiver:         ${bridgeData.receiver}`)
+  consola.info(`  minAmount:        ${bridgeData.minAmount}`)
+  consola.info(`  destinationChainId: ${bridgeData.destinationChainId}`)
+  consola.info(`  hasSourceSwaps:   ${bridgeData.hasSourceSwaps}`)
+  consola.info(`  hasDestinationCall: ${bridgeData.hasDestinationCall}`)
+}

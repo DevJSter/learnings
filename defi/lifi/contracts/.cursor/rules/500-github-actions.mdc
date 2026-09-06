@@ -1,0 +1,1 @@
+../../.agents/rules/500-github-actions.md

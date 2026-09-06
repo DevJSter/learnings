@@ -1,0 +1,9 @@
+out
+lib
+cache
+node_modules
+snapshots
+report
+src/dependencies
+JsonBindings.sol
+tests/misc/prototype

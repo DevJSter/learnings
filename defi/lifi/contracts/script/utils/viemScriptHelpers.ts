@@ -1,0 +1,728 @@
+/**
+ * Viem-based script helpers: chain construction, explorer URL builders, deployment file readers,
+ * and interactive CLI prompts (search/multiselect). Import lower-level RPC helpers from `utils.ts`.
+ */
+
+import * as fs from 'fs'
+import * as path from 'path'
+import readline from 'readline'
+
+import {
+  applyTronGridViemTransportExtras,
+  formatAddressForNetworkCliDisplay,
+  isTronNetworkKey,
+} from '@lifi/tron-devkit'
+import { consola } from 'consola'
+import * as dotenv from 'dotenv'
+import { defineChain, encodeFunctionData, parseAbi, type Chain } from 'viem'
+
+import networksConfig from '../../config/networks.json'
+import {
+  EnvironmentEnum,
+  type INetwork,
+  type INetworksObject,
+  type SupportedChain,
+} from '../common/types'
+
+import { getDeployments } from './deploymentHelpers'
+import { normalizeAddressForNetwork } from './normalizeAddressStringForViem'
+import { getRPCEnvVarName, OUT_ROOT } from './utils'
+
+dotenv.config()
+
+const colors = {
+  reset: '\x1b[0m',
+  red: '\x1b[31m',
+  green: '\x1b[32m',
+}
+
+export const networks: INetworksObject = networksConfig
+
+/**
+ * Parses an RPC URL and, if it contains embedded credentials (user:pass@host),
+ * returns a URL without credentials plus fetchOptions with Basic auth header.
+ * The viem library cannot handle user:pass@host in the URL; it only supports
+ * authentication via the Authorization header, so this helper is required for
+ * auth-protected RPC endpoints.
+ *
+ * TronGrid hosts are extended via {@link applyTronGridViemTransportExtras} (API key + retries).
+ */
+export function getTransportConfigFromRpcUrl(rpcUrl: string): {
+  url: string
+  fetchOptions?: { headers: Record<string, string> }
+  retryCount?: number
+  retryDelay?: number
+} {
+  let base: { url: string; fetchOptions?: { headers: Record<string, string> } }
+
+  try {
+    const url = new URL(rpcUrl)
+    if (!url.username) base = { url: rpcUrl }
+    else {
+      const cleanUrl = `${url.protocol}//${url.hostname}${
+        url.port ? `:${url.port}` : ''
+      }${url.pathname}${url.search}`
+      const encoded = Buffer.from(
+        `${decodeURIComponent(url.username)}:${decodeURIComponent(
+          url.password || ''
+        )}`,
+        'utf8'
+      ).toString('base64')
+      base = {
+        url: cleanUrl,
+        fetchOptions: { headers: { Authorization: `Basic ${encoded}` } },
+      }
+    }
+  } catch {
+    base = { url: rpcUrl }
+  }
+
+  return applyTronGridViemTransportExtras(base)
+}
+
+/**
+ * Builds a block explorer address URL for a given network and address.
+ *
+ * For most EVM explorers we use the default `/address/<address>` pattern.
+ * Some explorers (e.g. Tron, Sourcify-style, or custom paths) may need to be
+ * handled specially – these can be added incrementally by extending the
+ * switch below without changing any call sites.
+ *
+ * If no `explorerUrl` is configured for the network, this returns `undefined`.
+ */
+export const buildExplorerAddressUrl = (
+  networkId: string,
+  address: string
+): string | undefined => {
+  const network = networks[networkId]
+  if (!network || !network.explorerUrl) return undefined
+
+  const base = network.explorerUrl.replace(/\/+$/, '')
+
+  // Normalise address for URL usage; the helper is agnostic to checksum vs. lowercasing.
+  const addr = address
+
+  // Handle special explorers that do NOT follow the default /address/<address> pattern.
+  // This list can be extended over time as we discover exceptions.
+  switch (network.verificationType) {
+    // Tron-style explorers – use /#/address/<address> with base58 address
+    case 'tronscan': {
+      const tronAddr = formatAddressForNetworkCliDisplay(networkId, addr)
+      return `${base}/#/address/${tronAddr}`
+    }
+
+    // Sourcify-style explorer (Ronin) – contract details live under /address/<address>
+    // but the configured explorerUrl already includes '/explorer', so default works.
+
+    // OKLink, Blockscout, Routescan and most Etherscan-like explorers
+    // work fine with the default /address/<address> pattern.
+    default: {
+      return `${base}/address/${addr}`
+    }
+  }
+}
+
+/**
+ * Builds a block explorer URL that links directly to the contract/code page
+ * for a given network and address.
+ *
+ * This helper composes {@link buildExplorerAddressUrl} and, for the majority
+ * of explorers, simply appends `#code` so we land on the contract tab.
+ * TronScan uses `/#/contract/<address>/code` instead.
+ *
+ * As we discover explorers where this does not work, we can extend the switch
+ * below with network-specific overrides without touching call sites.
+ */
+export const buildExplorerContractPageUrl = (
+  networkId: string,
+  address: string
+): string | undefined => {
+  const network = networks[networkId]
+  if (!network || !network.explorerUrl) return undefined
+
+  const base = network.explorerUrl.replace(/\/+$/, '')
+
+  // TronScan contract tab: /#/contract/<address>/code (not /#/address/...#code).
+  if (network.verificationType === 'tronscan') {
+    const tronAddr = formatAddressForNetworkCliDisplay(networkId, address)
+    return `${base}/#/contract/${tronAddr}/code`
+  }
+
+  const addressUrl = buildExplorerAddressUrl(networkId, address)
+  if (!addressUrl) return undefined
+
+  switch (network.verificationType) {
+    // OKLink contract pages live under /address/<address>/contract
+    case 'oklink': {
+      return `${addressUrl}/contract`
+    }
+
+    // Blockscout v2 contract tab is ?tab=contract. Older instances still use #code.
+    case 'blockscout': {
+      if (
+        networkId === 'vana' ||
+        networkId === 'scroll' ||
+        networkId === 'ronin'
+      )
+        return `${addressUrl}?tab=contract`
+      return `${addressUrl}#code`
+    }
+
+    // Add more explicit overrides here for explorers that don't use `#code`.
+
+    default:
+      return `${addressUrl}#code`
+  }
+}
+
+/**
+ * Builds a block explorer transaction URL for a given network and tx hash.
+ *
+ * Uses `/tx/<hash>` for most EVM explorers and `/#/transaction/<hash>` for TronScan.
+ * Returns `undefined` if the network has no `explorerUrl` configured.
+ */
+export const buildExplorerTxUrl = (
+  networkId: string,
+  txHash: string
+): string | undefined => {
+  const network = networks[networkId]
+  if (!network || !network.explorerUrl) return undefined
+
+  const base = network.explorerUrl.replace(/\/+$/, '')
+
+  if (network.verificationType === 'tronscan')
+    return `${base}/#/transaction/${txHash}`
+
+  return `${base}/tx/${txHash}`
+}
+
+/**
+ * Builds a viem `Chain` object for the given network name using `config/networks.json`.
+ * Appends `/jsonrpc` to TronGrid RPC URLs so viem's JSON-RPC transport works correctly.
+ * Includes `multicall3` contract address when configured for the network.
+ *
+ * @param networkName - Key from `config/networks.json` (e.g. `'arbitrum'`, `'tron'`).
+ * @returns A viem `Chain` object ready for use with `createPublicClient` / `createWalletClient`.
+ * @throws If the network is not in config or the RPC env var is missing/empty.
+ */
+export const getViemChainForNetworkName = (networkName: string): Chain => {
+  const network = networks[networkName]
+
+  if (!network)
+    throw new Error(
+      `Chain ${networkName} does not exist. Please check that the network exists in 'config/networks.json'`
+    )
+
+  const envKey = getRPCEnvVarName(networkName)
+  const rpcUrlRaw = process.env[envKey]
+
+  if (!rpcUrlRaw?.trim())
+    throw new Error(
+      `Could not find RPC URL for network ${networkName}, please set ${envKey} in your environment`
+    )
+
+  // TronGrid full-node root serves Tron's native HTTP API; viem needs /jsonrpc
+  let rpcUrl = rpcUrlRaw.trim()
+  if (
+    isTronNetworkKey(networkName) &&
+    !rpcUrl.replace(/\/+$/, '').endsWith('/jsonrpc')
+  )
+    rpcUrl = `${rpcUrl.replace(/\/+$/, '')}/jsonrpc`
+
+  const chainConfig: Parameters<typeof defineChain>[0] = {
+    id: network.chainId,
+    name: network.name,
+    nativeCurrency: {
+      decimals: 18,
+      name: network.nativeCurrency,
+      symbol: network.nativeCurrency,
+    },
+    rpcUrls: {
+      default: {
+        http: [rpcUrl],
+      },
+    },
+  }
+
+  // Only include multicall3 if multicallAddress is available and non-empty
+  if (network.multicallAddress) {
+    chainConfig.contracts = {
+      multicall3: {
+        address: normalizeAddressForNetwork(
+          networkName,
+          network.multicallAddress
+        ),
+      },
+    }
+  }
+
+  const chain = defineChain(chainConfig)
+  return chain
+}
+
+/** Returns all networks from `config/networks.json` as an array, adding the map key as `id`. */
+export const getAllNetworksArray = (): INetwork[] => {
+  // Convert the object into an array of network objects
+  const networkArray = Object.entries(networksConfig).map(([key, value]) => ({
+    ...value,
+    id: key,
+  }))
+
+  return networkArray
+}
+
+/** Returns only networks with `status === 'active'` from `config/networks.json`. */
+export const getAllActiveNetworks = (): INetwork[] => {
+  // Convert the object into an array of network objects
+  const networkArray = getAllNetworksArray()
+
+  // Example: Filter networks where status is 'active'
+  const activeNetworks: INetwork[] = networkArray.filter(
+    (network) => network.status === 'active'
+  )
+
+  return activeNetworks
+}
+
+/**
+ * Returns true if the network has `type: "testnet"` in `config/networks.json`.
+ * Testnet networks have an EOA-owned diamond (no Safe multisig, no Timelock),
+ * so admin scripts must send transactions directly instead of proposing to a Safe.
+ *
+ * @param networkName - Network key as defined in `config/networks.json`.
+ * @returns `true` if the network's type is `"testnet"`, `false` otherwise (including unknown networks).
+ */
+export const isTestnetNetwork = (networkName: string): boolean => {
+  return networks[networkName]?.type === 'testnet'
+}
+
+export const printSuccess = (message: string): void => {
+  if (!message?.trim()) return
+  console.log(`${colors.green}${message}${colors.reset}`)
+}
+
+/**
+ * Retries a function multiple times if it fails
+ * @param func - The async function to retry
+ * @param retries - Number of retries remaining
+ * @returns The result of the function
+ */
+export const retry = async <T>(
+  func: () => Promise<T>,
+  retries = 3
+): Promise<T> => {
+  try {
+    const result = await func()
+    return result
+  } catch (e) {
+    consola.error('Error details:', {
+      error: e,
+      remainingRetries: retries - 1,
+    })
+    if (retries > 0) return retry(func, retries - 1)
+
+    throw e
+  }
+}
+
+/**
+ * Returns
+ * @param func - The async function to retry
+ * @param retries - Number of retries remaining
+ * @returns The result of the function
+ */
+export const getContractAddressForNetwork = async (
+  contractName: string,
+  network: SupportedChain,
+  environment: EnvironmentEnum = EnvironmentEnum.production
+): Promise<string> => {
+  // get network deploy log file
+  const deployments = await getDeployments(network, environment)
+  if (!deployments)
+    throw Error(`Could not deploy log for network ${network} in ${environment}`)
+
+  // extract address
+  const address = deployments[contractName] as `0x${string}`
+
+  if (!address)
+    throw Error(
+      `Could not find address of contract ${contractName} for network ${network} in ${environment} deploy log`
+    )
+
+  return address
+}
+
+/**
+ * Extracts the function selectors (method IDs) from the contract's ABI JSON output.
+ *
+ * @param contractName - Name of the contract (used to locate the compiled JSON)
+ * @param excludes - Optional list of function selectors (with or without '0x') to exclude
+ * @returns An array of function selectors as strings prefixed with '0x'
+ * @throws If the contract name resolves outside the build output directory, the compiled JSON is missing, or it contains no methodIdentifiers
+ */
+export function getFunctionSelectors(
+  contractName: string,
+  excludes: string[] = []
+): `0x${string}`[] {
+  // Build the file path to the contract's compiled JSON file
+  const base = OUT_ROOT
+  const filePath = path.resolve(
+    base,
+    `${contractName}.sol`,
+    `${contractName}.json`
+  )
+  const relativePath = path.relative(base, filePath)
+  if (relativePath.startsWith('..') || path.isAbsolute(relativePath))
+    throw new Error(`Invalid contract name: ${contractName}`)
+
+  // Ensure the contract file exists
+  if (!fs.existsSync(filePath))
+    throw new Error(`Contract JSON not found at path: ${filePath}`)
+
+  // Load and parse the compiled contract JSON
+  const raw = fs.readFileSync(filePath, 'utf8')
+  const json = JSON.parse(raw)
+  const identifiers = json?.methodIdentifiers
+
+  // Ensure methodIdentifiers are present in the JSON (these map function signatures to selectors)
+  if (!identifiers)
+    throw new Error(`No methodIdentifiers found in contract: ${contractName}`)
+
+  // Clean the exclusion list (remove '0x' prefix and lowercase them for consistent comparison)
+  const excludesClean = excludes.map((sel) =>
+    sel.replace(/^0x/, '').toLowerCase()
+  )
+
+  // Extract all function selectors, filter out excluded ones, and return as 0x-prefixed strings
+  return Object.values(identifiers as Record<string, string>)
+    .filter(
+      (sel) => !excludesClean.includes(sel.replace(/^0x/, '').toLowerCase())
+    )
+    .map((sel) => `0x${sel.replace(/^0x/, '')}` as `0x${string}`)
+}
+
+/**
+ * Reads and parses a (prod or staging) deploy log file
+ *
+ * @param network Name of the network
+ * @param environment the production environment (production/staging)
+ * @returns Parsed deploy log mapping contract names to their deployed addresses
+ * @throws If the network name resolves outside the deployments directory or no deploy log exists for the network/environment.
+ */
+export function getDeployLogFile(
+  network: string,
+  environment: EnvironmentEnum
+): Record<string, string> {
+  const suffix =
+    environment === EnvironmentEnum.production ? '' : `.${environment}`
+  const base = path.resolve('deployments')
+  const filePath = path.resolve(base, `${network}${suffix}.json`)
+  const relative = path.relative(base, filePath)
+  if (relative.startsWith('..') || path.isAbsolute(relative))
+    throw new Error(`Invalid network name: ${network}`)
+
+  if (!fs.existsSync(filePath))
+    throw new Error(`Deploy log not found: ${filePath}`)
+
+  return JSON.parse(fs.readFileSync(filePath, 'utf-8'))
+}
+
+/**
+ * Builds diamondCut calldata for removal from a diamond
+ *
+ * @param facets a list of facets to be removed
+ * @returns Hex-encoded calldata that removes all facets at once
+ */
+export function buildDiamondCutRemoveCalldata(
+  facets: { name: string; selectors: string[] }[]
+): `0x${string}` {
+  const diamondCutAbi = parseAbi([
+    'function diamondCut((address facetAddress, uint8 action, bytes4[] functionSelectors)[] _diamondCut, address _init, bytes _calldata)',
+  ])
+
+  // prepare the diamondCut arguments for each facet to be removed
+  const cutArgs = facets.map((facet) => ({
+    facetAddress: '0x0000000000000000000000000000000000000000' as `0x${string}`,
+    action: 2,
+    functionSelectors: facet.selectors.map(
+      (sel) => sel as `0x${string}`
+    ) as readonly `0x${string}`[],
+  }))
+
+  return encodeFunctionData({
+    abi: diamondCutAbi,
+    functionName: 'diamondCut',
+    args: [cutArgs, '0x0000000000000000000000000000000000000000', '0x'],
+  })
+}
+
+/**
+ * Builds calldata to de-register a periphery contract from a diamond
+ *
+ * @param name the name of the facet to be unregistered
+ * @returns Hex-encoded calldata that de-registers a periphery contract
+ */
+export function buildUnregisterPeripheryCalldata(name: string): `0x${string}` {
+  const abi = parseAbi([
+    'function registerPeripheryContract(string _name, address _contractAddress)',
+  ])
+
+  return encodeFunctionData({
+    abi,
+    functionName: 'registerPeripheryContract',
+    args: [name, '0x0000000000000000000000000000000000000000'],
+  })
+}
+
+/**
+ * Parses and validates a user-supplied environment string.
+ * @param environment - The environment string
+ * @returns The corresponding {@link EnvironmentEnum} member
+ */
+export function castEnv(environment: string): EnvironmentEnum {
+  if (environment === EnvironmentEnum.production)
+    return EnvironmentEnum.production
+  if (environment === EnvironmentEnum.staging) return EnvironmentEnum.staging
+  throw new Error(`Invalid environment: ${environment}`)
+}
+
+/**
+ * Helper function to display options in columns
+ */
+function displayOptionsInColumns(options: string[], columns = 3): void {
+  const maxLength = Math.max(...options.map((opt) => opt.length))
+  const paddedOptions = options.map((opt) => opt.padEnd(maxLength + 2))
+
+  const rows = Math.ceil(options.length / columns)
+
+  for (let row = 0; row < rows; row++) {
+    let line = ''
+    for (let col = 0; col < columns; col++) {
+      const index = row + col * rows
+      if (index < options.length) {
+        const number = (index + 1).toString().padStart(2)
+        line += `${number}. ${paddedOptions[index]}`
+      }
+    }
+    consola.log(line)
+  }
+}
+
+/**
+ * Helper function to get user input with proper signal handling
+ */
+export async function getUserInput(prompt: string): Promise<string> {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  })
+
+  return new Promise((resolve, _reject) => {
+    // Set up signal handlers
+    const handleSigInt = () => {
+      rl.close()
+      consola.info('Operation cancelled.')
+      process.exit(0)
+    }
+
+    const handleSigTerm = () => {
+      rl.close()
+      consola.info('Operation cancelled.')
+      process.exit(0)
+    }
+
+    process.once('SIGINT', handleSigInt)
+    process.once('SIGTERM', handleSigTerm)
+
+    rl.question(prompt, (answer) => {
+      rl.close()
+      // Clean up signal handlers
+      process.removeListener('SIGINT', handleSigInt)
+      process.removeListener('SIGTERM', handleSigTerm)
+      resolve(answer.trim())
+    })
+  })
+}
+
+/**
+ * Helper function to filter options based on user input with better UX
+ */
+export async function selectWithSearch(
+  message: string,
+  options: string[]
+): Promise<string> {
+  let filteredOptions = options
+  let selected: string | undefined
+
+  while (!selected) {
+    // Show current state
+    consola.log(`\n${message}`)
+    consola.log(`Found ${filteredOptions.length} options.`)
+    consola.log('')
+
+    // Display all options in columns
+    displayOptionsInColumns(filteredOptions)
+
+    consola.log('')
+    consola.log('Options:')
+    consola.log('- Type a number to select')
+    consola.log('- Press Ctrl+C to cancel')
+    consola.log('')
+
+    try {
+      const input = await getUserInput('Enter selection: ')
+
+      if (!input) {
+        consola.warn('Please enter a valid selection.')
+        continue
+      }
+
+      // Check if input is a number (selection)
+      const selectionNumber = parseInt(input)
+      if (!isNaN(selectionNumber))
+        if (selectionNumber >= 1 && selectionNumber <= filteredOptions.length) {
+          // Valid option selected
+          const selectedOption = filteredOptions[selectionNumber - 1]
+          if (selectedOption) {
+            selected = selectedOption
+            break
+          }
+        } else {
+          consola.warn('Invalid selection number.')
+          continue
+        }
+      else {
+        // Input is not a number - treat as search term
+        filteredOptions = options.filter((option) =>
+          option.toLowerCase().includes(input.toLowerCase())
+        )
+        if (filteredOptions.length === 0) {
+          consola.warn('No matches found. Showing all options.')
+          filteredOptions = options
+        }
+        continue
+      }
+    } catch (error) {
+      // Handle Ctrl+C or other interruptions
+      consola.info('Operation cancelled.')
+      process.exit(0)
+    }
+  }
+
+  if (!selected) throw new Error('No option was selected')
+
+  return selected
+}
+
+/**
+ * Helper function to filter options for multiselect with better UX
+ */
+export async function multiselectWithSearch(
+  message: string,
+  options: string[]
+): Promise<string[]> {
+  let filteredOptions = options
+  let selected: string[] = []
+  let isComplete = false
+
+  while (!isComplete) {
+    // Show current state
+    consola.log(`\n${message}`)
+    if (selected.length > 0) consola.log(`Selected: ${selected.join(', ')}`)
+
+    consola.log(`Found ${filteredOptions.length} options.`)
+    consola.log('')
+
+    // Display all options in columns with selection markers
+    const displayOptions = filteredOptions.map((option, index) => {
+      const isSelected = selected.includes(option)
+      const marker = isSelected ? '✓' : ' '
+      const number = (index + 1).toString().padStart(2)
+      return `${number}. [${marker}] ${option}`
+    })
+
+    // Display in columns
+    const columns = 2 // Use fewer columns for multiselect to accommodate checkboxes
+    const maxLength = Math.max(...displayOptions.map((opt) => opt.length))
+    const paddedOptions = displayOptions.map((opt) => opt.padEnd(maxLength + 2))
+
+    const rows = Math.ceil(displayOptions.length / columns)
+
+    for (let row = 0; row < rows; row++) {
+      let line = ''
+      for (let col = 0; col < columns; col++) {
+        const index = row + col * rows
+        if (index < displayOptions.length) line += paddedOptions[index]
+      }
+      consola.log(line)
+    }
+
+    consola.log('')
+    consola.log('Options:')
+    consola.log(
+      "- Type numbers (comma-separated) to select/deselect, e.g.: '1,2,3"
+    )
+    consola.log('- Type "done" when finished')
+    consola.log('- Press Ctrl+C to cancel')
+    consola.log('')
+
+    try {
+      const input = await getUserInput('Enter selection: ')
+
+      if (!input) {
+        consola.warn('Please enter a valid selection.')
+        continue
+      }
+
+      if (input.toLowerCase() === 'done')
+        if (selected.length > 0) {
+          isComplete = true
+          break
+        } else {
+          consola.warn('Please select at least one option.')
+          continue
+        }
+
+      // Check if input is numbers (selection)
+      const numbers = input
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => s)
+      const allNumbers = numbers.every((n) => !isNaN(parseInt(n)))
+
+      if (allNumbers && numbers.length > 0) {
+        const selectionNumbers = numbers.map((n) => parseInt(n))
+
+        // Process regular selections
+        for (const num of selectionNumbers)
+          if (num >= 1 && num <= filteredOptions.length) {
+            const option = filteredOptions[num - 1]
+            if (option)
+              if (selected.includes(option))
+                selected = selected.filter((item) => item !== option)
+              else selected.push(option)
+          }
+
+        consola.info(`Facet(s) selected: ${selected.join(', ')}`)
+        isComplete = true
+        break
+      } else {
+        // Input is not numbers - treat as search term
+        filteredOptions = options.filter((option) =>
+          option.toLowerCase().includes(input.toLowerCase())
+        )
+        if (filteredOptions.length === 0) {
+          consola.warn('No matches found. Showing all options.')
+          filteredOptions = options
+        }
+        continue
+      }
+    } catch (error) {
+      // Handle Ctrl+C or other interruptions
+      consola.info('Operation cancelled.')
+      process.exit(0)
+    }
+  }
+
+  return selected
+}

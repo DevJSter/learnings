@@ -1,0 +1,1 @@
+../../.agents/rules/000-global-standards.md

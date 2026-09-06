@@ -1,0 +1,72 @@
+{
+  "LiFiDiamond": {
+    "Facets": {
+      "0x6Ed7e36b4AdBae7A9CCBf1476449d5eD9F47fce4": {
+        "Name": "DiamondCutFacet",
+        "Version": "1.0.0"
+      },
+      "0x11EFE8bb7AC1C7c5eCE67dA437Ea87e6E457A1BA": {
+        "Name": "DiamondLoupeFacet",
+        "Version": "1.0.0"
+      },
+      "0xBBf60d8679c4516aC0B81a419b6C9Cf9BD1974dE": {
+        "Name": "OwnershipFacet",
+        "Version": "1.0.0"
+      },
+      "0xB2d0251A4eAeFc524D62Bf87Cce0454548DA810c": {
+        "Name": "WithdrawFacet",
+        "Version": "1.0.0"
+      },
+      "0x05AB10ae838235D68Ba0ae4D4120De94982a1e9e": {
+        "Name": "WhitelistManagerFacet",
+        "Version": "1.0.0"
+      },
+      "0xEdFCAb7871a773aB1a4829Da11bBA4c21E864938": {
+        "Name": "AccessManagerFacet",
+        "Version": "1.0.0"
+      },
+      "0x4afeD2d2FE564cDBf0D195f69747cfB010524D61": {
+        "Name": "PeripheryRegistryFacet",
+        "Version": "1.0.0"
+      },
+      "0x5db483Fe3FE9ae091ACfCcA27088529C952B4487": {
+        "Name": "GasZipFacet",
+        "Version": "2.0.4"
+      },
+      "0xf6Cc4ca0Ff4bea26554A8090f2cE4088A3A7EeC4": {
+        "Name": "GenericSwapFacetV3",
+        "Version": "1.0.1"
+      },
+      "0xac02970E1c46015e05d3649143512B1b480aBfe6": {
+        "Name": "CalldataVerificationFacet",
+        "Version": "1.3.0"
+      },
+      "0xC9e488f2Fa9CB10fE53783Ce83B4A3AeF8C385A1": {
+        "Name": "EmergencyPauseFacet",
+        "Version": "1.0.1"
+      },
+      "0x51Fd4F1cCacDD1bbc92689f1D1eC419addd8529e": {
+        "Name": "StargateFacetV2",
+        "Version": "1.0.1"
+      }
+    },
+    "Periphery": {
+      "ERC20Proxy": "0x7C25598d46593854904ec28c22A74a5C1d7f0c2A",
+      "Executor": "0x3d32d5575C7Cf67C51819AE59a1Af4856f5bF594",
+      "FeeCollector": "0xa8633C0F6b63D2092e5bF0cb0205CdE38F69a78E",
+      "FeeForwarder": "0xC748171a028401BfD0c0F0a757ab4A1F93b00576",
+      "GasZipPeriphery": "0x3D7986F13fE3d387D4CEb41cAb9403aB96E040D7",
+      "LiFiDEXAggregator": "0xeCCc2Ce02907c1C86B286FB50d1355384F55A298",
+      "LidoWrapper": "",
+      "OutputValidator": "0x4E001D80ED10912530EfdDaC91f09F836FC87782",
+      "Patcher": "",
+      "Permit2Proxy": "0x767cEE938DF7d88D3e880Cbfc35C9cAfee882f4d",
+      "ReceiverAcrossV3": "",
+      "ReceiverAcrossV4": "",
+      "ReceiverChainflip": "",
+      "ReceiverOIF": "",
+      "ReceiverStargateV2": "0x6fff376d51C4305AA42f4916fa35c3Ac03974CeB",
+      "TokenWrapper": "0x94Caf1ed23310Ef981AA60e378ab369D4875a7F7"
+    }
+  }
+}

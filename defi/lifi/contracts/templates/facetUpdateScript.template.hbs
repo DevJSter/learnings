@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: LGPL-3.0-only
+pragma solidity ^0.8.17;
+
+import { UpdateScriptBase } from "./utils/UpdateScriptBase.sol";
+
+contract DeployScript is UpdateScriptBase {
+    function run()
+        public
+        returns (address[] memory facets, bytes memory cutData)
+    {
+        return update("{{properCase name}}Facet");
+    }
+
+    // The generated facet sets its config via constructor immutables and has no
+    // init function, so no overrides are needed by default.
+    //
+    // If you add an init function to your facet (or need to keep selectors that
+    // clash with other facets out of the diamond cut), import the facet
+    // (import { {{properCase name}}Facet } from "lifi/Facets/{{properCase name}}Facet.sol";)
+    // and override getExcludes(), referencing the function you added, e.g.:
+    //
+    // function getExcludes() internal pure override returns (bytes4[] memory) {
+    //     bytes4[] memory excludes = new bytes4[](1);
+    //     excludes[0] = {{properCase name}}Facet.init{{properCase name}}.selector;
+    //
+    //     return excludes;
+    // }
+    //
+    // If that init function must be called with calldata when the facet is
+    // added to the diamond, also override getCallData() (path and json are
+    // inherited from ScriptBase/UpdateScriptBase):
+    //
+    // function getCallData() internal override returns (bytes memory) {
+    //     path = string.concat(root, "/config/{{kebabCase name}}.json");
+    //     json = vm.readFile(path);
+    //
+    //     return
+    //         abi.encodeWithSelector(
+    //             {{properCase name}}Facet.init{{properCase name}}.selector,
+    //             json.readAddress(string.concat(".example.", network))
+    //         );
+    // }
+}

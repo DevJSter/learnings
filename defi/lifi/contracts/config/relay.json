@@ -1,0 +1,140 @@
+{
+  "--- link_to_relay_docs_for_relay_depository_contract_addresses ---": "https://docs.relay.link/references/protocol/depository/addresses",
+  "--- alternative (API) ---": "https://api.relay.link/chains?includeChains=562da1f0-bffe-4208-a3d8-143c2fbdb380",
+  "mainnet": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "abstract": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "arbitrum": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "arbitrumnova": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "avalanche": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "apechain": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "berachain": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "base": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "blast": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "boba": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "bob": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "bsc": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "celo": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "cronos": {
+    "relayDepository": "0x59916da825d2d2ec1bf878d71c88826f6633ecca"
+  },
+  "flow": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "gnosis": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "gravity": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "hyperevm": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "ink": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "katana": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "lisk": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "linea": {
+    "relayDepository": "0x59916da825d2d2ec1bf878d71c88826f6633ecca"
+  },
+  "mantle": {
+    "relayDepository": "0x59916da825d2d2ec1bf878d71c88826f6633ecca"
+  },
+  "megaeth": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "metis": {
+    "relayDepository": "0x59916da825d2d2ec1bf878d71c88826f6633ecca"
+  },
+  "mode": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "monad": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "morph": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "optimism": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "plasma": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "plume": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "polygon": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "polygonzkevm": {
+    "relayDepository": "0x59916da825d2d2ec1bf878d71c88826f6633ecca"
+  },
+  "robinhood": {
+    "relayDepository": "0x4cD00E387622C35bDDB9b4c962C136462338BC31"
+  },
+  "ronin": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "scroll": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "sei": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "somnia": {
+    "relayReceiver": "0xbf05bdaff9b80cf511f89069410af2d7b1897471",
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "soneium": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "sonic": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "stable": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "tempo": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "unichain": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "worldchain": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  },
+  "zksync": {
+    "relayDepository": "0x4cd00e387622c35bddb9b4c962c136462338bc31"
+  }
+}

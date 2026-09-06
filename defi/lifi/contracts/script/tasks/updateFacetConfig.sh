@@ -1,0 +1,122 @@
+#!/bin/bash
+
+updateFacetConfig() {
+  # load deploy script & helper functions
+  source .env
+  source script/helperFunctions.sh
+
+  # read function arguments into variables
+  ENVIRONMENT="$2"
+  SCRIPT="$4"
+  DIAMOND_CONTRACT_NAME="$5"
+
+  # if no NETWORK was passed to this function, ask user to select it
+  if [[ -z "$3" ]]; then
+      # get user-selected network from list
+      echo "Select Networks"
+      if command -v gum >/dev/null 2>&1; then
+          checkNetworksJsonFilePath || checkFailure $? "retrieve NETWORKS_JSON_FILE_PATH"
+          # Read the networks into an array, works on both Mac and Linux
+          IFS=$'\n' read -r -d '' -a NETWORKS < <(jq -r 'keys[]' "$NETWORKS_JSON_FILE_PATH" | gum choose --no-limit)
+
+          if [[ ${#NETWORKS[@]} -eq 0 ]]; then
+              error "No networks selected - exiting script"
+              exit 1
+          fi
+          echo "[info] selected networks: ${NETWORKS[*]}"
+      else
+          error "gum is not installed"
+          exit 1
+      fi
+  else
+      NETWORKS=("$3")
+  fi
+
+    # if no SCRIPT was passed to this function, ask user to select it
+  if [[ -z "$SCRIPT" ]]; then
+    # select which script to execute
+    local SCRIPT=$(ls -1 "$CONFIG_SCRIPT_DIRECTORY" | sed -e 's/\.s.sol$//' | gum filter --placeholder "Please select a script to execute")
+    echo "[info] selected script: $SCRIPT"
+  fi
+
+  # determine full (relative) path of deploy script
+  SCRIPT_PATH=$CONFIG_SCRIPT_DIRECTORY"$SCRIPT.s.sol"
+
+  DIAMOND_CONTRACT_NAME="LiFiDiamond"
+
+  # set flag for mutable/immutable diamond
+  USE_MUTABLE_DIAMOND="true"
+
+  # get file suffix based on value in variable ENVIRONMENT
+  FILE_SUFFIX=$(getFileSuffix "$ENVIRONMENT")
+
+  # initialize failure flag
+  FAILED=0
+
+  # make sure GAS_ESTIMATE_MULTIPLIER is set
+  if [[ -z "$GAS_ESTIMATE_MULTIPLIER" ]]; then
+    GAS_ESTIMATE_MULTIPLIER=130 # this is foundry's default value
+  fi
+
+  echoDebug "GAS_ESTIMATE_MULTIPLIER=$GAS_ESTIMATE_MULTIPLIER (default value: 130, set in .env for example to 200 for doubling Foundry's estimate)"
+
+  for NETWORK in "${NETWORKS[@]}"; do
+    # get deployer wallet balance
+    echo "[info] loading deployer wallet balance for network $NETWORK..."
+    BALANCE=$(getDeployerBalance "$NETWORK" "$ENVIRONMENT")
+    echo "[info] deployer wallet balance in this network: $BALANCE"
+    echo ""
+
+    # ensure all required .env values are set
+    checkRequiredVariablesInDotEnv "$NETWORK"
+
+    # repeatedly call selected script until it's succeeded or out of attempts
+    ATTEMPTS=1
+    while [ $ATTEMPTS -le "$MAX_ATTEMPTS_PER_SCRIPT_EXECUTION" ]; do
+      echo "[info] now executing $SCRIPT on $DIAMOND_CONTRACT_NAME in $ENVIRONMENT environment on $NETWORK (FILE_SUFFIX=$FILE_SUFFIX, USE_MUTABLE_DIAMOND=$USE_MUTABLE_DIAMOND)"
+
+      # Add skip simulation flag based on environment variable
+      SKIP_SIMULATION_FLAG=$(getSkipSimulationFlag)
+
+      # forge >=1.6 validates the simulation sender's balance; override to the funded deployer.
+      DEPLOYER_ADDRESS=$(getDeployerAddress "$NETWORK" "$ENVIRONMENT")
+
+      # EIP-1559-capable chains must not get --legacy; pre-1559 chains require it.
+      local LEGACY_FLAG="--legacy"
+      if networkSupportsEip1559 "$NETWORK"; then
+        LEGACY_FLAG=""
+      fi
+
+      # Execute, parse, and check return code
+      if ! executeAndParse \
+        "NETWORK=$NETWORK FILE_SUFFIX=$FILE_SUFFIX USE_DEF_DIAMOND=$USE_MUTABLE_DIAMOND PRIVATE_KEY=$(getPrivateKey \"$NETWORK\" \"$ENVIRONMENT\") forge script \"$SCRIPT_PATH\" --fork-url \"$NETWORK\" --sender \"$DEPLOYER_ADDRESS\" --json --broadcast $LEGACY_FLAG $SKIP_SIMULATION_FLAG --gas-estimate-multiplier \"$GAS_ESTIMATE_MULTIPLIER\"" \
+        "true" \
+        "forge script failed for $SCRIPT on network $NETWORK" \
+        "continue"; then
+        ATTEMPTS=$(($ATTEMPTS + 1))
+        sleep 1
+        continue
+      fi
+      
+      # If we reach here, execution was successful
+      break
+    done
+
+    # check if call was executed successfully or used all attempts
+    if [ $ATTEMPTS -gt "$MAX_ATTEMPTS_PER_SCRIPT_EXECUTION" ]; then
+      error "failed to execute $SCRIPT on $DIAMOND_CONTRACT_NAME in $ENVIRONMENT environment on $NETWORK"
+      FAILED=1
+      continue
+    else
+      echo "[info] script executed successfully"
+    fi
+  done
+
+  # check if any network failed and exit with appropriate status
+  if [ $FAILED -eq 1 ]; then
+    error "one or more networks failed during execution"
+    exit 1
+  fi
+}
+
+

@@ -1,0 +1,1 @@
+../../.agents/rules/100-solidity-basics.md

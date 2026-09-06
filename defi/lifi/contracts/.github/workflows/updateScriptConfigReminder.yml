@@ -1,0 +1,29 @@
+# Notify SmartContract channel when .env.example changes
+# - posts a Slack reminder to dev-sc-github-ci-notifications so developers refresh their local .env after a config addition/rename
+# - triggers on push to main when .env.example is modified
+# - known limitations: only fires on main (not on PR review); the workflow does not verify that developers actually updated their .env
+
+name: Notify SmartContract channel when .env.example changes
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.env.example'
+
+permissions:
+  contents: read # required to evaluate changed files and trigger based on path filters
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Send Reminder to Slack CI-notifications Channel
+        uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_DEV_SC_GITHUB_CI_NOTIFICATIONS }}
+          webhook-type: incoming-webhook
+          payload: |
+            text: "Hey team, please update your .env file (see <https://github.com/lifinance/contracts/blob/main/.env.example|.env.example> for latest changes)"

@@ -1,0 +1,801 @@
+// SPDX-License-Identifier: LGPL-3.0-only
+pragma solidity ^0.8.17;
+
+import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import { TestBaseFacet } from "../utils/TestBaseFacet.sol";
+import { LibSwap } from "lifi/Libraries/LibSwap.sol";
+import { GlacisFacet } from "lifi/Facets/GlacisFacet.sol";
+import { IGlacisAirlift, QuoteSendInfo } from "lifi/Interfaces/IGlacisAirlift.sol";
+import { TransferFromFailed, InvalidReceiver, InvalidAmount, CannotBridgeToSameNetwork, NativeAssetNotSupported, InvalidConfig, InvalidCallData, InvalidNonEVMReceiver } from "lifi/Errors/GenericErrors.sol";
+import { TestWhitelistManagerBase } from "../utils/TestWhitelistManagerBase.sol";
+
+/// @notice Test suite for GlacisFacet with multibridge routing support
+/// @dev Tests include the new outputToken parameter for multibridge routing of tokens like USDT & LBTC
+/// When outputToken is bytes32(0), Glacis uses default routing (backwards compatible)
+/// When outputToken is specified, enables multibridge routing for specific token paths
+
+// Stub GlacisFacet Contract
+contract TestGlacisFacet is GlacisFacet, TestWhitelistManagerBase {
+    constructor(IGlacisAirlift _airlift) GlacisFacet(_airlift) {}
+}
+
+abstract contract GlacisFacetTestBase is TestBaseFacet {
+    GlacisFacet.GlacisData internal glacisData;
+    IGlacisAirlift internal airliftContract;
+    TestGlacisFacet internal glacisFacet;
+    ERC20 internal srcToken;
+    uint256 internal defaultSrcTokenAmount;
+    uint256 internal destinationChainId;
+    address internal addressSrcToken;
+    address internal outputToken;
+    uint256 internal fuzzingAmountMinValue;
+    uint256 internal fuzzingAmountMaxValue;
+
+    uint256 internal payableAmount = 1 ether;
+
+    function setUp() public virtual {
+        initTestBase();
+
+        srcToken = ERC20(addressSrcToken);
+
+        defaultSrcTokenAmount = 1_000 * 10 ** srcToken.decimals();
+
+        // Deal tokens to all necessary addresses
+        deal(
+            addressSrcToken,
+            USER_SENDER,
+            500_000 * 10 ** srcToken.decimals()
+        );
+
+        // Deal tokens to the facet/diamond for potential transfers
+        deal(
+            addressSrcToken,
+            address(diamond),
+            100_000 * 10 ** srcToken.decimals()
+        );
+
+        // Deal native tokens for gas fees
+        deal(USER_SENDER, 100 ether);
+        deal(REFUND_WALLET, 10 ether);
+        deal(address(diamond), 10 ether);
+
+        glacisFacet = new TestGlacisFacet(airliftContract);
+        bytes4[] memory functionSelectors = new bytes4[](4);
+        functionSelectors[0] = glacisFacet.startBridgeTokensViaGlacis.selector;
+        functionSelectors[1] = glacisFacet
+            .swapAndStartBridgeTokensViaGlacis
+            .selector;
+        functionSelectors[2] = glacisFacet.addAllowedContractSelector.selector;
+        functionSelectors[3] = glacisFacet
+            .removeAllowedContractSelector
+            .selector;
+
+        addFacet(diamond, address(glacisFacet), functionSelectors);
+        glacisFacet = TestGlacisFacet(address(diamond));
+        glacisFacet.addAllowedContractSelector(
+            ADDRESS_UNISWAP,
+            uniswap.swapExactTokensForTokens.selector
+        );
+        glacisFacet.addAllowedContractSelector(
+            ADDRESS_UNISWAP,
+            uniswap.swapTokensForExactETH.selector
+        );
+        glacisFacet.addAllowedContractSelector(
+            ADDRESS_UNISWAP,
+            uniswap.swapETHForExactTokens.selector
+        );
+        _facetTestContractAddress = address(glacisFacet);
+        vm.label(address(glacisFacet), "GlacisFacet");
+
+        // adjust bridgeData
+        bridgeData.bridge = "glacis";
+        bridgeData.sendingAssetId = addressSrcToken;
+        bridgeData.minAmount = defaultSrcTokenAmount;
+        bridgeData.destinationChainId = destinationChainId;
+
+        // add liquidity for dex pair DAI-{SOURCE TOKEN}
+        // this is necessary because Glacis does not provide routes for stablecoins
+        // like USDT or USDC, forcing us to work with custom tokens that often lack
+        // liquidity on V2 dexes
+        addLiquidity(
+            ADDRESS_DAI,
+            addressSrcToken,
+            100_000 * 10 ** ERC20(ADDRESS_DAI).decimals(),
+            100_000 * 10 ** srcToken.decimals()
+        );
+
+        // Call `quoteSend` to estimate the required native fee for the transfer.
+        // This is necessary to ensure the transaction has sufficient gas for execution.
+        // The `payableAmount` parameter simulates the amount of native tokens required for the estimation.
+
+        // Since `quoteSend` is a view function and therefore not payable,
+        // we receive `msg.value` as a parameter. When quoting, you can simulate
+        // the impact on your `msg.value` by passing a sample amount (payableAmount), such as 1 ETH,
+        // to see how it would be adjusted during an actual send.
+
+        // While we are estimating nativeFee, we initially don't know what
+        // `msg.value` is "enough." That's why we need to provide an overestimation,
+        // for example, 1 ETH. It goes through the full
+        // bridging logic and determines "I only need 0.005ETH from that 1ETH."
+        // The nativeFee is then returned in QuoteSendInfo. By using 1 ETH,
+        // we’re just on the safe side of overestimation to prevent the function
+        // from reverting.
+        QuoteSendInfo memory quoteSendInfo = IGlacisAirlift(
+            address(airliftContract)
+        ).quoteSend(
+                bridgeData.sendingAssetId,
+                bridgeData.minAmount,
+                bytes32(uint256(uint160(bridgeData.receiver))),
+                bridgeData.destinationChainId,
+                REFUND_WALLET,
+                payableAmount
+            );
+
+        addToMessageValue =
+            quoteSendInfo.gmpFee.nativeFee +
+            quoteSendInfo.airliftFeeInfo.airliftFee.nativeFee;
+
+        // produce valid GlacisData
+        glacisData = GlacisFacet.GlacisData({
+            receiverAddress: bytes32(uint256(uint160(bridgeData.receiver))),
+            refundAddress: REFUND_WALLET,
+            nativeFee: addToMessageValue,
+            outputToken: outputToken == address(0)
+                ? bytes32(0)
+                : bytes32(uint256(uint160(outputToken)))
+        });
+    }
+
+    function test_WillStoreConstructorParametersCorrectly() public {
+        glacisFacet = new TestGlacisFacet(airliftContract);
+
+        assertEq(address(glacisFacet.AIRLIFT()), address(airliftContract));
+    }
+
+    function testRevert_WhenConstructedWithZeroAddress() public {
+        vm.expectRevert(InvalidConfig.selector);
+        new TestGlacisFacet(IGlacisAirlift(address(0)));
+    }
+
+    function initiateBridgeTxWithFacet(bool) internal virtual override {
+        glacisFacet.startBridgeTokensViaGlacis{ value: addToMessageValue }(
+            bridgeData,
+            glacisData
+        );
+    }
+
+    function initiateSwapAndBridgeTxWithFacet(bool) internal virtual override {
+        glacisFacet.swapAndStartBridgeTokensViaGlacis{
+            value: addToMessageValue
+        }(bridgeData, swapData, glacisData);
+    }
+
+    function testBase_CanBridgeNativeTokens() public virtual override {
+        // facet does not support bridging of native assets
+    }
+
+    function testBase_CanBridgeTokens()
+        public
+        virtual
+        override
+        assertBalanceChange(
+            addressSrcToken,
+            USER_SENDER,
+            -int256(defaultSrcTokenAmount)
+        )
+        assertBalanceChange(addressSrcToken, USER_RECEIVER, 0)
+        assertBalanceChange(ADDRESS_DAI, USER_SENDER, 0)
+        assertBalanceChange(ADDRESS_DAI, USER_RECEIVER, 0)
+    {
+        vm.startPrank(USER_SENDER);
+
+        // approval
+        srcToken.approve(address(glacisFacet), bridgeData.minAmount);
+
+        //prepare check for events
+        vm.expectEmit(true, true, true, true, address(glacisFacet));
+        emit LiFiTransferStarted(bridgeData);
+
+        initiateBridgeTxWithFacet(false);
+        vm.stopPrank();
+    }
+
+    function testBase_CanBridgeTokens_fuzzed(
+        uint256 amount
+    ) public virtual override {
+        vm.assume(
+            amount > fuzzingAmountMinValue * 10 ** srcToken.decimals() &&
+                amount < fuzzingAmountMaxValue * 10 ** srcToken.decimals()
+        );
+        bridgeData.minAmount = amount;
+
+        vm.startPrank(USER_SENDER);
+
+        // approval
+        srcToken.approve(address(glacisFacet), bridgeData.minAmount);
+
+        QuoteSendInfo memory quoteSendInfo = IGlacisAirlift(
+            address(airliftContract)
+        ).quoteSend(
+                bridgeData.sendingAssetId,
+                bridgeData.minAmount,
+                bytes32(uint256(uint160(bridgeData.receiver))),
+                bridgeData.destinationChainId,
+                REFUND_WALLET,
+                payableAmount
+            );
+        addToMessageValue =
+            quoteSendInfo.gmpFee.nativeFee +
+            quoteSendInfo.airliftFeeInfo.airliftFee.nativeFee;
+
+        //prepare check for events
+        vm.expectEmit(true, true, true, true, address(glacisFacet));
+        emit LiFiTransferStarted(bridgeData);
+
+        initiateBridgeTxWithFacet(false);
+        vm.stopPrank();
+    }
+
+    function testBase_CanSwapAndBridgeNativeTokens() public virtual override {
+        // facet does not support bridging of native assets
+    }
+
+    function setDefaultSwapDataSingleDAItoSourceToken() internal virtual {
+        delete swapData;
+        // Swap DAI -> {SOURCE TOKEN}
+        address[] memory path = new address[](2);
+        path[0] = ADDRESS_DAI;
+        path[1] = addressSrcToken;
+
+        uint256 amountOut = defaultSrcTokenAmount;
+
+        // Calculate DAI amount
+        uint256[] memory amounts = uniswap.getAmountsIn(amountOut, path);
+        uint256 amountIn = amounts[0];
+        swapData.push(
+            LibSwap.SwapData({
+                callTo: address(uniswap),
+                approveTo: address(uniswap),
+                sendingAssetId: ADDRESS_DAI,
+                receivingAssetId: addressSrcToken,
+                fromAmount: amountIn,
+                callData: abi.encodeWithSelector(
+                    uniswap.swapExactTokensForTokens.selector,
+                    amountIn,
+                    amountOut,
+                    path,
+                    _facetTestContractAddress,
+                    block.timestamp + 20 minutes
+                ),
+                requiresDeposit: true
+            })
+        );
+    }
+
+    function testBase_CanSwapAndBridgeTokens()
+        public
+        virtual
+        override
+        assertBalanceChange(ADDRESS_DAI, USER_RECEIVER, 0)
+        assertBalanceChange(addressSrcToken, USER_SENDER, 0)
+        assertBalanceChange(addressSrcToken, USER_RECEIVER, 0)
+    {
+        uint256 initialDAIBalance = dai.balanceOf(USER_SENDER);
+
+        vm.startPrank(USER_SENDER);
+
+        // prepare bridgeData
+        bridgeData.hasSourceSwaps = true;
+
+        // reset swap data
+        setDefaultSwapDataSingleDAItoSourceToken();
+
+        // approval
+        dai.approve(_facetTestContractAddress, swapData[0].fromAmount);
+
+        uint256 initialETHBalance = USER_SENDER.balance;
+
+        //prepare check for events
+        vm.expectEmit(true, true, true, true, _facetTestContractAddress);
+        emit AssetSwapped(
+            bridgeData.transactionId,
+            address(uniswap),
+            ADDRESS_DAI,
+            addressSrcToken,
+            swapData[0].fromAmount,
+            bridgeData.minAmount,
+            block.timestamp
+        );
+
+        vm.expectEmit(true, true, true, true, _facetTestContractAddress);
+        emit LiFiTransferStarted(bridgeData);
+
+        initiateSwapAndBridgeTxWithFacet(false);
+
+        // check balances after call
+        assertEq(
+            dai.balanceOf(USER_SENDER),
+            initialDAIBalance - swapData[0].fromAmount
+        );
+        assertEq(USER_SENDER.balance, initialETHBalance - addToMessageValue);
+    }
+
+    function testBase_Revert_BridgeAndSwapWithInvalidReceiverAddress()
+        public
+        virtual
+        override
+    {
+        vm.startPrank(USER_SENDER);
+        // prepare bridgeData
+        bridgeData.receiver = address(0);
+        bridgeData.hasSourceSwaps = true;
+
+        setDefaultSwapDataSingleDAItoSourceToken();
+
+        vm.expectRevert(InvalidReceiver.selector);
+
+        initiateSwapAndBridgeTxWithFacet(false);
+        vm.stopPrank();
+    }
+
+    function testBase_Revert_SwapAndBridgeWithInvalidAmount()
+        public
+        virtual
+        override
+    {
+        vm.startPrank(USER_SENDER);
+        // prepare bridgeData
+        bridgeData.hasSourceSwaps = true;
+        bridgeData.minAmount = 0;
+
+        setDefaultSwapDataSingleDAItoSourceToken();
+
+        vm.expectRevert(InvalidAmount.selector);
+
+        initiateSwapAndBridgeTxWithFacet(false);
+        vm.stopPrank();
+    }
+
+    function testBase_Revert_SwapAndBridgeToSameChainId()
+        public
+        virtual
+        override
+    {
+        vm.startPrank(USER_SENDER);
+        // prepare bridgeData
+        bridgeData.destinationChainId = block.chainid;
+        bridgeData.hasSourceSwaps = true;
+
+        setDefaultSwapDataSingleDAItoSourceToken();
+        dai.approve(_facetTestContractAddress, swapData[0].fromAmount);
+
+        vm.expectRevert(CannotBridgeToSameNetwork.selector);
+
+        initiateSwapAndBridgeTxWithFacet(false);
+        vm.stopPrank();
+    }
+
+    function testBase_Revert_CallerHasInsufficientFunds()
+        public
+        virtual
+        override
+    {
+        vm.startPrank(USER_SENDER);
+
+        srcToken.approve(
+            address(_facetTestContractAddress),
+            defaultSrcTokenAmount
+        );
+
+        // send all available source token balance to different account to ensure sending wallet has no source token funds
+        srcToken.transfer(USER_RECEIVER, srcToken.balanceOf(USER_SENDER));
+
+        vm.expectRevert(TransferFromFailed.selector);
+
+        initiateBridgeTxWithFacet(false);
+        vm.stopPrank();
+    }
+
+    function testRevert_InvalidRefundAddress() public virtual {
+        vm.startPrank(USER_SENDER);
+
+        glacisData = GlacisFacet.GlacisData({
+            receiverAddress: bytes32(uint256(uint160(bridgeData.receiver))),
+            refundAddress: address(0),
+            nativeFee: addToMessageValue,
+            outputToken: outputToken == address(0)
+                ? bytes32(0)
+                : bytes32(uint256(uint160(outputToken)))
+        });
+
+        srcToken.approve(
+            address(_facetTestContractAddress),
+            defaultSrcTokenAmount
+        );
+
+        vm.expectRevert(abi.encodeWithSelector(InvalidCallData.selector));
+
+        initiateBridgeTxWithFacet(false);
+
+        vm.stopPrank();
+    }
+
+    function testRevert_WhenTryToBridgeNativeAsset() public virtual {
+        vm.startPrank(USER_SENDER);
+
+        bridgeData.sendingAssetId = address(0); // address zero is considered as native asset
+
+        vm.expectRevert(
+            abi.encodeWithSelector(NativeAssetNotSupported.selector)
+        );
+
+        initiateBridgeTxWithFacet(false);
+
+        vm.stopPrank();
+    }
+
+    function testRevert_WhenTryToSwapAndBridgeNativeAsset() public virtual {
+        vm.startPrank(USER_SENDER);
+
+        bridgeData.hasSourceSwaps = true;
+        bridgeData.sendingAssetId = address(0); // address zero is considered as native asset
+
+        vm.expectRevert(
+            abi.encodeWithSelector(NativeAssetNotSupported.selector)
+        );
+
+        initiateSwapAndBridgeTxWithFacet(false);
+
+        vm.stopPrank();
+    }
+
+    function testRevert_InvalidReceiverAddress() public virtual {
+        vm.startPrank(USER_SENDER);
+
+        // Set receiverAddress to bytes32(0) which should trigger the InvalidReceiver revert
+        glacisData = GlacisFacet.GlacisData({
+            refundAddress: REFUND_WALLET,
+            receiverAddress: bytes32(0),
+            nativeFee: addToMessageValue,
+            outputToken: outputToken == address(0)
+                ? bytes32(0)
+                : bytes32(uint256(uint160(outputToken)))
+        });
+
+        srcToken.approve(
+            address(_facetTestContractAddress),
+            defaultSrcTokenAmount
+        );
+
+        vm.expectRevert(InvalidReceiver.selector);
+
+        initiateBridgeTxWithFacet(false);
+
+        vm.stopPrank();
+    }
+
+    function testRevert_InvalidReceiverAddress_SwapAndBridge() public virtual {
+        vm.startPrank(USER_SENDER);
+
+        // Set receiverAddress to bytes32(0) which should trigger the InvalidReceiver revert
+        glacisData = GlacisFacet.GlacisData({
+            refundAddress: REFUND_WALLET,
+            receiverAddress: bytes32(0),
+            nativeFee: addToMessageValue,
+            outputToken: outputToken == address(0)
+                ? bytes32(0)
+                : bytes32(uint256(uint160(outputToken)))
+        });
+
+        // prepare bridgeData
+        bridgeData.hasSourceSwaps = true;
+
+        // reset swap data
+        setDefaultSwapDataSingleDAItoSourceToken();
+
+        // approval
+        dai.approve(_facetTestContractAddress, swapData[0].fromAmount);
+
+        vm.expectRevert(InvalidReceiver.selector);
+
+        initiateSwapAndBridgeTxWithFacet(false);
+
+        vm.stopPrank();
+    }
+
+    // Test for non-EVM receiver validation
+    function testRevert_InvalidNonEVMReceiver() public virtual {
+        vm.startPrank(USER_SENDER);
+
+        // Set receiver to NON_EVM_ADDRESS and receiverAddress to bytes32(0)
+        bridgeData.receiver = NON_EVM_ADDRESS;
+        glacisData = GlacisFacet.GlacisData({
+            refundAddress: REFUND_WALLET,
+            receiverAddress: bytes32(0),
+            nativeFee: addToMessageValue,
+            outputToken: outputToken == address(0)
+                ? bytes32(0)
+                : bytes32(uint256(uint160(outputToken)))
+        });
+
+        srcToken.approve(
+            address(_facetTestContractAddress),
+            defaultSrcTokenAmount
+        );
+
+        vm.expectRevert(InvalidNonEVMReceiver.selector);
+
+        initiateBridgeTxWithFacet(false);
+
+        vm.stopPrank();
+    }
+
+    function testRevert_InvalidNonEVMReceiver_SwapAndBridge() public virtual {
+        vm.startPrank(USER_SENDER);
+
+        // Set receiver to NON_EVM_ADDRESS and receiverAddress to bytes32(0)
+        bridgeData.receiver = NON_EVM_ADDRESS;
+        bridgeData.hasSourceSwaps = true;
+        glacisData = GlacisFacet.GlacisData({
+            refundAddress: REFUND_WALLET,
+            receiverAddress: bytes32(0),
+            nativeFee: addToMessageValue,
+            outputToken: outputToken == address(0)
+                ? bytes32(0)
+                : bytes32(uint256(uint160(outputToken)))
+        });
+
+        // reset swap data
+        setDefaultSwapDataSingleDAItoSourceToken();
+
+        // approval
+        dai.approve(_facetTestContractAddress, swapData[0].fromAmount);
+
+        vm.expectRevert(InvalidNonEVMReceiver.selector);
+
+        initiateSwapAndBridgeTxWithFacet(false);
+
+        vm.stopPrank();
+    }
+
+    // Test for EVM receiver address mismatch
+    function testRevert_InvalidReceiver_Mismatch() public virtual {
+        vm.startPrank(USER_SENDER);
+
+        // Set different receiver addresses
+        address differentReceiver = address(
+            0x1234567890123456789012345678901234567890
+        );
+        bridgeData.receiver = differentReceiver;
+        glacisData = GlacisFacet.GlacisData({
+            refundAddress: REFUND_WALLET,
+            receiverAddress: bytes32(uint256(uint160(USER_RECEIVER))), // Different from bridgeData.receiver
+            nativeFee: addToMessageValue,
+            outputToken: outputToken == address(0)
+                ? bytes32(0)
+                : bytes32(uint256(uint160(outputToken)))
+        });
+
+        srcToken.approve(
+            address(_facetTestContractAddress),
+            defaultSrcTokenAmount
+        );
+
+        vm.expectRevert(InvalidReceiver.selector);
+
+        initiateBridgeTxWithFacet(false);
+
+        vm.stopPrank();
+    }
+
+    function testRevert_InvalidReceiver_Mismatch_SwapAndBridge()
+        public
+        virtual
+    {
+        vm.startPrank(USER_SENDER);
+
+        // Set different receiver addresses
+        address differentReceiver = address(
+            0x1234567890123456789012345678901234567890
+        );
+        bridgeData.receiver = differentReceiver;
+        bridgeData.hasSourceSwaps = true;
+        glacisData = GlacisFacet.GlacisData({
+            refundAddress: REFUND_WALLET,
+            receiverAddress: bytes32(uint256(uint160(USER_RECEIVER))), // Different from bridgeData.receiver
+            nativeFee: addToMessageValue,
+            outputToken: outputToken == address(0)
+                ? bytes32(0)
+                : bytes32(uint256(uint160(outputToken)))
+        });
+
+        // reset swap data
+        setDefaultSwapDataSingleDAItoSourceToken();
+
+        // approval
+        dai.approve(_facetTestContractAddress, swapData[0].fromAmount);
+
+        vm.expectRevert(InvalidReceiver.selector);
+
+        initiateSwapAndBridgeTxWithFacet(false);
+
+        vm.stopPrank();
+    }
+
+    // Test successful non-EVM bridge
+    function test_CanBridgeToNonEVMChain() public virtual {
+        vm.startPrank(USER_SENDER);
+
+        // Set receiver to NON_EVM_ADDRESS and valid receiverAddress
+        bridgeData.receiver = NON_EVM_ADDRESS;
+        bytes32 nonEVMReceiver = bytes32(uint256(uint160(USER_RECEIVER)));
+        glacisData = GlacisFacet.GlacisData({
+            refundAddress: REFUND_WALLET,
+            receiverAddress: nonEVMReceiver,
+            nativeFee: addToMessageValue,
+            outputToken: outputToken == address(0)
+                ? bytes32(0)
+                : bytes32(uint256(uint160(outputToken)))
+        });
+
+        srcToken.approve(
+            address(_facetTestContractAddress),
+            defaultSrcTokenAmount
+        );
+
+        // Expect the BridgeToNonEVMChainBytes32 event to be emitted
+        vm.expectEmit(true, true, true, true, address(glacisFacet));
+        emit BridgeToNonEVMChainBytes32(
+            bridgeData.transactionId,
+            bridgeData.destinationChainId,
+            nonEVMReceiver
+        );
+
+        // Expect the LiFiTransferStarted event to be emitted
+        vm.expectEmit(true, true, true, true, address(glacisFacet));
+        emit LiFiTransferStarted(bridgeData);
+
+        initiateBridgeTxWithFacet(false);
+
+        vm.stopPrank();
+    }
+
+    function test_CanBridgeToNonEVMChain_SwapAndBridge() public virtual {
+        vm.startPrank(USER_SENDER);
+
+        // Set receiver to NON_EVM_ADDRESS and valid receiverAddress
+        bridgeData.receiver = NON_EVM_ADDRESS;
+        bridgeData.hasSourceSwaps = true;
+        bytes32 nonEVMReceiver = bytes32(uint256(uint160(USER_RECEIVER)));
+        glacisData = GlacisFacet.GlacisData({
+            refundAddress: REFUND_WALLET,
+            receiverAddress: nonEVMReceiver,
+            nativeFee: addToMessageValue,
+            outputToken: outputToken == address(0)
+                ? bytes32(0)
+                : bytes32(uint256(uint160(outputToken)))
+        });
+
+        // reset swap data
+        setDefaultSwapDataSingleDAItoSourceToken();
+
+        // approval
+        dai.approve(_facetTestContractAddress, swapData[0].fromAmount);
+
+        // Expect the BridgeToNonEVMChainBytes32 event to be emitted
+        vm.expectEmit(true, true, true, true, address(glacisFacet));
+        emit BridgeToNonEVMChainBytes32(
+            bridgeData.transactionId,
+            bridgeData.destinationChainId,
+            nonEVMReceiver
+        );
+
+        // Expect the LiFiTransferStarted event to be emitted
+        vm.expectEmit(true, true, true, true, address(glacisFacet));
+        emit LiFiTransferStarted(bridgeData);
+
+        initiateSwapAndBridgeTxWithFacet(false);
+
+        vm.stopPrank();
+    }
+
+    // Test successful EVM bridge with matching addresses
+    function test_CanBridgeToEVMChain_WithMatchingAddresses() public virtual {
+        vm.startPrank(USER_SENDER);
+
+        // Set matching receiver addresses
+        bridgeData.receiver = USER_RECEIVER;
+        glacisData = GlacisFacet.GlacisData({
+            refundAddress: REFUND_WALLET,
+            receiverAddress: bytes32(uint256(uint160(USER_RECEIVER))),
+            nativeFee: addToMessageValue,
+            outputToken: outputToken == address(0)
+                ? bytes32(0)
+                : bytes32(uint256(uint160(outputToken)))
+        });
+
+        srcToken.approve(
+            address(_facetTestContractAddress),
+            defaultSrcTokenAmount
+        );
+
+        // Expect only the LiFiTransferStarted event to be emitted (no non-EVM event)
+        vm.expectEmit(true, true, true, true, address(glacisFacet));
+        emit LiFiTransferStarted(bridgeData);
+
+        initiateBridgeTxWithFacet(false);
+
+        vm.stopPrank();
+    }
+
+    function test_CanBridgeToEVMChain_WithMatchingAddresses_SwapAndBridge()
+        public
+        virtual
+    {
+        vm.startPrank(USER_SENDER);
+
+        // Set matching receiver addresses
+        bridgeData.receiver = USER_RECEIVER;
+        bridgeData.hasSourceSwaps = true;
+        glacisData = GlacisFacet.GlacisData({
+            refundAddress: REFUND_WALLET,
+            receiverAddress: bytes32(uint256(uint160(USER_RECEIVER))),
+            nativeFee: addToMessageValue,
+            outputToken: outputToken == address(0)
+                ? bytes32(0)
+                : bytes32(uint256(uint160(outputToken)))
+        });
+
+        // reset swap data
+        setDefaultSwapDataSingleDAItoSourceToken();
+
+        // approval
+        dai.approve(_facetTestContractAddress, swapData[0].fromAmount);
+
+        // Expect only the LiFiTransferStarted event to be emitted (no non-EVM event)
+        vm.expectEmit(true, true, true, true, address(glacisFacet));
+        emit LiFiTransferStarted(bridgeData);
+
+        initiateSwapAndBridgeTxWithFacet(false);
+
+        vm.stopPrank();
+    }
+}
+
+contract GlacisFacetOpenUSDTTest is GlacisFacetTestBase {
+    function setUp() public virtual override {
+        customRpcUrlForForking = "ETH_NODE_URI_OPTIMISM";
+        customBlockNumberForForking = 144628286; // Specific block for testing multibridge routing
+
+        airliftContract = IGlacisAirlift(
+            0x568c2c0C94B85B23E1C3Cf3E79D51b1566C8F663
+        );
+
+        addressSrcToken = 0x1217BfE6c773EEC6cc4A38b5Dc45B92292B6E189; // OpenUSDT on Optimism
+        outputToken = 0x1217BfE6c773EEC6cc4A38b5Dc45B92292B6E189; // Output token for multibridge routing
+        destinationChainId = 130; // Unichain
+        fuzzingAmountMinValue = 1; // Minimum fuzzing amount (actual value includes token decimals)
+        fuzzingAmountMaxValue = 10_000; // Maximum fuzzing amount (actual value includes token decimals)
+
+        super.setUp();
+    }
+}
+
+contract GlacisFacetUSDT0Test is GlacisFacetTestBase {
+    function setUp() public virtual override {
+        customRpcUrlForForking = "ETH_NODE_URI_OPTIMISM";
+        customBlockNumberForForking = 144628286; // Specific block for testing multibridge routing
+
+        airliftContract = IGlacisAirlift(
+            0x568c2c0C94B85B23E1C3Cf3E79D51b1566C8F663
+        );
+
+        addressSrcToken = 0x01bFF41798a0BcF287b996046Ca68b395DbC1071; // USDT0 on Optimism
+        outputToken = 0x9151434b16b9763660705744891fA906F660EcC5; // Output token for multibridge routing
+        destinationChainId = 130; // Unichain
+        fuzzingAmountMinValue = 1; // Minimum fuzzing amount (actual value includes token decimals)
+        fuzzingAmountMaxValue = 10_000; // Maximum fuzzing amount (actual value includes token decimals)
+
+        super.setUp();
+    }
+}

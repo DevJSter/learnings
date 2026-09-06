@@ -1,0 +1,1 @@
+../../.agents/rules/401-testing-patterns.md

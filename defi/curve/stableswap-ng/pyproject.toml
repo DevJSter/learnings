@@ -1,0 +1,73 @@
+[project]
+name = "stableswap-ng"
+version = "0.0.1"
+requires-python = ">=3.10"
+dependencies = [
+  "curve-std",
+  "snekmate>=0.1.2",
+  "vyper==0.4.3",
+]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel.force-include]
+"contracts/main/StableSwapNGLPOracle.vy" = "stableswap_ng/LPOracle.vy"
+
+[dependency-groups]
+dev = [
+  "black>=24.0.0,<25",
+  "eth-account>=0.13.0,<0.14",
+  "flake8>=7.0.0,<8",
+  "isort>=5.0.0,<6",
+  "mamushi>=0.0.4a3,<0.0.5",
+  "pre-commit>=3.3.3,<4",
+  "pycryptodome>=3.18.0,<4",
+  "titanoboa>=0.2.8",
+  "titanoboa-zksync",
+]
+
+[tool.uv]
+# titanoboa 0.2.8 pins mkdocs-material 9.5.41, whose declared 10.x range
+# includes versions affected by GHSA-gm37-52c6-37mw.
+override-dependencies = ["pymdown-extensions==11.0.1"]
+
+[tool.uv.sources]
+curve-std = { git = "https://github.com/curvefi/curve-std", rev = "main" }
+
+[tool.black]
+exclude = '''
+(
+  /(
+    \.eggs         # exclude a few common directories in the
+    | \.git          # root of the project
+    | \.hg
+    | \.mypy_cache
+    | \.tox
+    | \.venv
+    | _build
+    | build
+    | dist
+  )/
+)
+'''
+line-length = 120
+target_version = ['py310']
+
+[tool.isort]
+profile = "black"
+py_version = 310
+known_first_party = "stableswap_ng"
+
+[tool.pytest.ini_options]
+markers = [
+  "only_plain_tokens", "only_oracle_tokens", "only_rebasing_tokens",
+  "skip_plain_tokens", "skip_oracle_tokens", "skip_rebasing_tokens",
+  "all_token_pairs", "extensive_token_pairs",
+  "only_basic_pool", "only_meta_pool",
+  "skip_basic_pool", "skip_meta_pool",
+]
+filterwarnings = [
+  "ignore:PytestUnknownMarkWarning"
+]

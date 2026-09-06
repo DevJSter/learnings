@@ -1,0 +1,1 @@
+../../.agents/rules/200-typescript.md
