@@ -38,18 +38,22 @@ understand a protocol; read its reference to have seen all of it.
 |---|---|
 | [`uni/V2-COMPLETE-REFERENCE.md`](uni/V2-COMPLETE-REFERENCE.md) | All of v2-core and v2-periphery, including the `examples/` contracts |
 | [`uni/V3-CORE-COMPLETE-REFERENCE.md`](uni/V3-CORE-COMPLETE-REFERENCE.md) | Pool, Factory, Deployer and all 15 math libraries, derivations included |
-| [`uni/V3-PERIPHERY-COMPLETE-REFERENCE.md`](uni/V3-PERIPHERY-COMPLETE-REFERENCE.md) | Position manager, router, quoters, lenses, on-chain SVG pipeline |
+| [`uni/V3-PERIPHERY-COMPLETE-REFERENCE.md`](uni/V3-PERIPHERY-COMPLETE-REFERENCE.md) | Position manager, router, quoters, lenses, on-chain SVG pipeline *(partial)* |
 | [`uni/V4-COMPLETE-REFERENCE.md`](uni/V4-COMPLETE-REFERENCE.md) | PoolManager, Pool, Hooks, every type and transient-storage library |
-| [`curve/CLASSIC-POOLS-COMPLETE-REFERENCE.md`](curve/CLASSIC-POOLS-COMPLETE-REFERENCE.md) | Every classic pool template and all ~35 deployed pool families, plus zaps |
-| [`curve/STABLESWAP-NG-COMPLETE-REFERENCE.md`](curve/STABLESWAP-NG-COMPLETE-REFERENCE.md) | Every NG contract: pool, metapool, views, math, factory, zap, gauge |
-| [`curve/DAO-COMPLETE-REFERENCE.md`](curve/DAO-COMPLETE-REFERENCE.md) | CRV, veCRV, GaugeController, every gauge version, Minter, fees, vesting |
-| [`aave/V3-PROTOCOL-COMPLETE-REFERENCE.md`](aave/V3-PROTOCOL-COMPLETE-REFERENCE.md) | v3.6 core: Pool, every logic library, tokenization, config bitmaps, math |
-| [`aave/V3-PERIPHERY-COMPLETE-REFERENCE.md`](aave/V3-PERIPHERY-COMPLETE-REFERENCE.md) | v3.6 rewards, oracle, rate strategy, stata-token, config engine, deployments |
-| [`aave/V4-COMPLETE-REFERENCE.md`](aave/V4-COMPLETE-REFERENCE.md) | v4 Hub, Spoke, liquidation, position managers, access control, config engine |
-| [`lifi/FACETS-COMPLETE-REFERENCE.md`](lifi/FACETS-COMPLETE-REFERENCE.md) | All ~43 facets: every bridge integration and every infrastructure facet |
-| [`lifi/LIBRARIES-PERIPHERY-COMPLETE-REFERENCE.md`](lifi/LIBRARIES-PERIPHERY-COMPLETE-REFERENCE.md) | Diamond internals, LibSwap/LibAsset/allowlists, Executor, receivers, aggregator |
+| [`curve/STABLESWAP-NG-COMPLETE-REFERENCE.md`](curve/STABLESWAP-NG-COMPLETE-REFERENCE.md) | Every NG contract: pool, metapool, views, math, factory, zap, gauge *(partial)* |
+| [`curve/DAO-COMPLETE-REFERENCE.md`](curve/DAO-COMPLETE-REFERENCE.md) | CRV, veCRV, GaugeController, every gauge version, Minter, fees, vesting *(partial)* |
+| [`aave/V1-V2-COMPLETE-REFERENCE.md`](aave/V1-V2-COMPLETE-REFERENCE.md) | v1 LendingPoolCore, CoreLibrary, AToken; v2 pending *(partial)* |
+| [`aave/V3-PROTOCOL-COMPLETE-REFERENCE.md`](aave/V3-PROTOCOL-COMPLETE-REFERENCE.md) | v3.6 core: Pool, every logic library, tokenization, config bitmaps, math *(partial)* |
+| [`aave/V3-PERIPHERY-COMPLETE-REFERENCE.md`](aave/V3-PERIPHERY-COMPLETE-REFERENCE.md) | v3.6 rewards, oracle, rate strategy, stata-token, config engine *(partial)* |
+| [`aave/V4-COMPLETE-REFERENCE.md`](aave/V4-COMPLETE-REFERENCE.md) | v4 Hub, Spoke, liquidation, position managers, access control *(partial)* |
+| [`lifi/FACETS-COMPLETE-REFERENCE.md`](lifi/FACETS-COMPLETE-REFERENCE.md) | All 42 facets: every bridge integration and every infrastructure facet |
+| [`lifi/LIBRARIES-PERIPHERY-COMPLETE-REFERENCE.md`](lifi/LIBRARIES-PERIPHERY-COMPLETE-REFERENCE.md) | Diamond internals, LibSwap/LibAsset/allowlists, Executor, receivers *(partial)* |
 
-Each reference ends with an ABI/selector table, a storage-layout table, an events
+Documents marked *(partial)* were stopped mid-write and are missing their closing
+sections; their citations have not had a final verification sweep. A reference for
+Curve's classic pool families was planned but never started.
+
+The finished references end with an ABI/selector table, a storage-layout table, an events
 reference, a revert-string decoder, and a use-case index that maps "I want to do
 X" to the exact function and its full internal call chain.
 
