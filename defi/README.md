@@ -53,6 +53,9 @@ Each reference ends with an ABI/selector table, a storage-layout table, an event
 reference, a revert-string decoder, and a use-case index that maps "I want to do
 X" to the exact function and its full internal call chain.
 
+See [`SESSION-LOG.md`](SESSION-LOG.md) for which documents are finished, which
+were stopped mid-write, and what is still owed.
+
 ## The source tree
 
 ```
